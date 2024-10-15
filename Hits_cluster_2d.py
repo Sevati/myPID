@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 from math import sin,cos
 from sklearn.cluster import DBSCAN, MeanShift, estimate_bandwidth,OPTICS
 import matplotlib.cm as cm
-
+from bayes_opt import BayesianOptimization
 
 def load_data(inputFile):
   # Load the data
@@ -212,28 +212,81 @@ def calculate_success_rate(gt_labels, method_labels, out_successful_classes, out
     out_total_classes += total_classes
     return success_rate, out_successful_classes, out_total_classes
 
+def bayesian_optimization(data_set, n_iter=10):
+    groundtruth_labels = data_set['trkid'].values
+    def calculate_clustering_accuracy_via_hungarian(eps,min_samples, groundtruth_labels):
+        # 将标签转换为numpy数组
+        dbscan_labels =  dbscan_clustering(data_set, eps, min_samples)
+        dbscan_labels = dbscan_labels['dbscan_label'].values
 
+        dbscan_labels = np.array(dbscan_labels)
+        groundtruth_labels = np.array(groundtruth_labels)
 
-def visualize_clusters(data, evtCount, successful_classes_1, total_classes_1,successful_classes_2, total_classes_2):
-    print(f'processing event======================: {evtCount}')
+        # 确保输入是有效的
+        if len(dbscan_labels) != len(groundtruth_labels):
+            raise ValueError("长度不匹配：dbscan_labels 和 groundtruth_labels 必须有相同长度")
 
+        # 创建混淆矩阵
+        conf_matrix = confusion_matrix(groundtruth_labels, dbscan_labels)
+
+        # 使用匈牙利算法寻找最优标签对齐
+        row_ind, col_ind = linear_sum_assignment(-conf_matrix)
+
+        # 计算经过优化后的ARI
+        new_dbscan_labels = np.zeros_like(dbscan_labels)
+        for i, j in zip(row_ind, col_ind):
+            new_dbscan_labels[dbscan_labels == j] = i
+
+        # 计算和返回调整兰德指数（Adjusted Rand Index）
+        ari = adjusted_rand_score(groundtruth_labels, new_dbscan_labels)
+        return ari
+
+    # def dbscan_clustering_wrapper(eps, min_samples):
+    #     labels, _ = cluster(data_set, eps, min_samples)
+    #     return -adjusted_rand_score(gt_labels, labels)
+
+    # Extract x and y coordinates
+    X = data_set[['finalX', 'finalY']].values
+
+    # Extract ground truth labels
+    gt_labels = data_set['trkid'].values
+
+    # Initialize Bayesian optimization
+    pbounds = {'eps': (0.01, 10),
+              'min_samples': (1, 100)}
+    optimizer = BayesianOptimization(
+        f=calculate_clustering_accuracy_via_hungarian,
+        pbounds=pbounds,
+        random_state=1,
+    )
+
+    # Run optimization
+    optimizer.maximize(n_iter=n_iter)
+
+    # Extract best parameters
+    eps = optimizer.max['params']['eps']
+    min_samples = optimizer.max['params']['min_samples']
+
+    # Run DBSCAN with best parameters
+    labels, _ = cluster(data_set, eps, min_samples)
+
+    # Calculate ARI and return
+    ari = adjusted_rand_score(gt_labels, labels)
+    print('test ARI:', ari)
+    return ari, eps, min_samples
+
+def visualize_clusters(data, evtCount, successful_classes, total_classes, label_name):
     unique_trkids = data['trkid'].unique()
     trkid_colors = cm.rainbow(np.linspace(0, 1, len(unique_trkids)))
     gt_labels = data['trkid'].values
 
-    dbscan_labels = data['dbscan_label'].values
-    # dbscan_labels = data['tag'].values    
-    meanshift_labels = data['meanshift_label'].values
+    cluster_labels = data[label_name].values
 
     gt_labels = reassign_labels(gt_labels)
-    dbscan_labels = reassign_labels(dbscan_labels)
-    meanshift_labels = reassign_labels(meanshift_labels)
+    cluster_labels = reassign_labels(cluster_labels)
     
-    tracking_efficiency1,successful_classes_1, total_classes_1 = calculate_success_rate(gt_labels, dbscan_labels,successful_classes_1, total_classes_1)
-    tracking_efficiency2,successful_classes_2, total_classes_2 = calculate_success_rate(gt_labels, meanshift_labels,successful_classes_2, total_classes_2)
-
-    # print(f'DBSCAN and MeanShift Tracking Efficiency: {tracking_efficiency1:.2f},     {tracking_efficiency2:.2f}')
-    return successful_classes_1, total_classes_1, successful_classes_2, total_classes_2 
+    success_rate, successful_classes, total_classes = calculate_success_rate(gt_labels, cluster_labels,successful_classes, total_classes)
+    return successful_classes, total_classes 
 
 
 def main():
@@ -241,6 +294,7 @@ def main():
   successful_classes_1, total_classes_1 = 0, 0
   successful_classes_2, total_classes_2 = 0, 0
   for evtCount in range(EvtNum):
+    print(f'processing event======================: {evtCount}')
     Hits = get_hits(df,evtCount) 
     if Hits.shape[0] < 10 :  
       continue
@@ -250,21 +304,22 @@ def main():
     data_set = np.array(data_set).T
     eps = 0.2#select_minpts(data_set)
     min_samples = 4
-    data, dbscan_n_clusters_ = dbscan_clustering(Hits,eps, min_samples)
+    dbscan_clustering(Hits,eps, min_samples)
 
     quantile = 0.5#optimal_quantile(data_set)
     print(f'Optimal quantile: {quantile:.2f}')
-    data, meanshift_n_clusters_ = meanshift_clustering(Hits, quantile=quantile, n_samples=100)
-    
-    successful_classes_1, total_classes_1, successful_classes_2, total_classes_2 = visualize_clusters(Hits,evtCount,successful_classes_1, total_classes_1,successful_classes_2, total_classes_2)
-  print(f'All Tracking Success Rate: DBSCAN--{successful_classes_1}/{total_classes_1}={successful_classes_1/total_classes_1:.2f},     MeanShift--{successful_classes_2}/{total_classes_2}={successful_classes_2/total_classes_2:.2f}')
-#   print(f'All DBSCAN and MeanShift : {successful_classes_1/total_classes_1:.2f},     {successful_classes_2/total_classes_2:.2f}')
-      
-
+    meanshift_clustering(Hits, quantile=quantile, n_samples=100)
+    successful_classes_1, total_classes_1 = visualize_clusters(Hits,evtCount,successful_classes_1, total_classes_1,'dbscan_label')
+    successful_classes_2, total_classes_2 = visualize_clusters(Hits,evtCount,successful_classes_2, total_classes_2,'meanshift_label')
+  efficiency_1 = successful_classes_1/total_classes_1
+  efficiency_2 = successful_classes_2/total_classes_2
+  
+  print(f'All Tracking Success Rate: DBSCAN--{successful_classes_1}/{total_classes_1}={efficiency_1:.2f},     MeanShift--{successful_classes_2}/{total_classes_2}={efficiency_2:.2f}')
+  return
     
 
 if __name__ == '__main__':
-  EvtNum = 10000
+  EvtNum = 100
   inputFile = "/Users/Sevati/PycharmProjects/untitled/PID/pid_data/2Ddata/hit_5.txt"
   main()
 
