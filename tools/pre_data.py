@@ -18,20 +18,20 @@ straight_layers = [2, 3, 4, 9, 10]  # 直丝超层
 reverse_slant_layers = [0, 5, 7]  # 逆向的斜丝超层
 positive_slant_layers = [1, 6, 8]  # 正向的斜丝超层
 
-# 创建特征
-data['LayerType'] = data['Layer'] % 2  # 奇数层和偶数层
-data['Offset'] = data['LayerType'] * 0.5  # 根据奇偶层设置偏移
+# 创建一个层级偏移特征
+# data['LayerType'] = data['Layer'] % 2  # 奇数层和偶数层
+# data['Offset'] = data['LayerType'] * 0.5  # 根据奇偶层设置偏移
+data['Offset'] = np.where(data['Layer'] % 2 == 0, 0, 0.5)
 
 
 # 将数据按超层类型分类
-data_straight = data[data['Group'].isin(straight_layers)]
-data_reverse_slant = data[data['Group'].isin(reverse_slant_layers)]
-data_positive_slant = data[data['Group'].isin(positive_slant_layers)]
+# data_straight = data[data['Group'].isin(straight_layers)]
+# data_reverse_slant = data[data['Group'].isin(reverse_slant_layers)]
+# data_positive_slant = data[data['Group'].isin(positive_slant_layers)]
 # 将数据按超层类型分类，并重新索引
-# data_straight = data[data['Group'].isin(straight_layers)].reset_index(drop=True)
-# data_reverse_slant = data[data['Group'].isin(reverse_slant_layers)].reset_index(drop=True)
-# data_positive_slant = data[data['Group'].isin(positive_slant_layers)].reset_index(drop=True)
-
+data_straight = data[data['Group'].isin(straight_layers)].reset_index(drop=True)
+data_reverse_slant = data[data['Group'].isin(reverse_slant_layers)].reset_index(drop=True)
+data_positive_slant = data[data['Group'].isin(positive_slant_layers)].reset_index(drop=True)
 
 # 提取特征和目标变量
 def prepare_data(data):
@@ -67,12 +67,14 @@ def train_and_evaluate(X, y_X, y_Y):
     mse_Y = mean_squared_error(y_test_Y, y_pred_Y)
     mae_Y = mean_absolute_error(y_test_Y, y_pred_Y)
 
-    return y_pred_X, y_pred_Y, mse_X, mae_X, mse_Y, mae_Y
+    # return y_pred_X, y_pred_Y, mse_X, mae_X, mse_Y, mae_Y
+    return y_test_X.reset_index(drop=True), y_test_Y.reset_index(drop=True), y_pred_X, y_pred_Y, mse_X, mae_X, mse_Y, mae_Y
+
 
 # 训练并评估模型
-y_pred_X_straight, y_pred_Y_straight, mse_X_straight, mae_X_straight, mse_Y_straight, mae_Y_straight = train_and_evaluate(X_straight, y_X_straight, y_Y_straight)
-y_pred_X_reverse_slant, y_pred_Y_reverse_slant, mse_X_reverse_slant, mae_X_reverse_slant, mse_Y_reverse_slant, mae_Y_reverse_slant = train_and_evaluate(X_reverse_slant, y_X_reverse_slant, y_Y_reverse_slant)
-y_pred_X_positive_slant, y_pred_Y_positive_slant, mse_X_positive_slant, mae_X_positive_slant, mse_Y_positive_slant, mae_Y_positive_slant = train_and_evaluate(X_positive_slant, y_X_positive_slant, y_Y_positive_slant)
+y_test_X_straight, y_test_Y_straight, y_pred_X_straight, y_pred_Y_straight, mse_X_straight, mae_X_straight, mse_Y_straight, mae_Y_straight = train_and_evaluate(X_straight, y_X_straight, y_Y_straight)
+y_test_X_reverse_slant, y_test_Y_reverse_slant, y_pred_X_reverse_slant, y_pred_Y_reverse_slant, mse_X_reverse_slant, mae_X_reverse_slant, mse_Y_reverse_slant, mae_Y_reverse_slant = train_and_evaluate(X_reverse_slant, y_X_reverse_slant, y_Y_reverse_slant)
+y_test_X_positive_slant, y_test_Y_positive_slant, y_pred_X_positive_slant, y_pred_Y_positive_slant, mse_X_positive_slant, mae_X_positive_slant, mse_Y_positive_slant, mae_Y_positive_slant = train_and_evaluate(X_positive_slant, y_X_positive_slant, y_Y_positive_slant)
 
 # 输出误差
 print("直丝超层 - X坐标 - 均方误差 (MSE):", mse_X_straight, ", 平均绝对误差 (MAE):", mae_X_straight)
@@ -118,5 +120,9 @@ def plot_predictions(y_test_X, y_pred_X, y_test_Y, y_pred_Y, title):
 
 # 可视化预测结果
 # plot_predictions(y_X_straight, y_pred_X_straight, y_Y_straight, y_pred_Y_straight, 'Straight Layers Prediction')
-plot_predictions(y_X_reverse_slant, y_pred_X_reverse_slant, y_Y_reverse_slant, y_pred_Y_reverse_slant, 'Reverse Slant Layers Prediction')
-plot_predictions(y_X_positive_slant, y_pred_X_positive_slant, y_Y_positive_slant, y_pred_Y_positive_slant, 'Positive Slant Layers Prediction')
+# plot_predictions(y_X_reverse_slant, y_pred_X_reverse_slant, y_Y_reverse_slant, y_pred_Y_reverse_slant, 'Reverse Slant Layers Prediction')
+# plot_predictions(y_X_positive_slant, y_pred_X_positive_slant, y_Y_positive_slant, y_pred_Y_positive_slant, 'Positive Slant Layers Prediction')
+# 可视化预测结果
+plot_predictions(y_test_X_straight, y_pred_X_straight, y_test_Y_straight, y_pred_Y_straight, 'Straight Layers Prediction')
+plot_predictions(y_test_X_reverse_slant, y_pred_X_reverse_slant, y_test_Y_reverse_slant, y_pred_Y_reverse_slant, 'Reverse Slant Layers Prediction')
+plot_predictions(y_test_X_positive_slant, y_pred_X_positive_slant, y_test_Y_positive_slant, y_pred_Y_positive_slant, 'Positive Slant Layers Prediction')
