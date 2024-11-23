@@ -98,6 +98,8 @@ def dbscan_objective(params, train_data, train_labels):
 
 # 定义 MeanShift 的目标函数，计算损失
 def meanshift_objective(params, train_data, train_labels):
+    # bandwidth = estimate_bandwidth(X, quantile=quantile, n_samples=n_samples)
+
     bandwidth = params[0]
     loss = {}
     
@@ -135,7 +137,7 @@ if __name__ == '__main__':
 
 
     # 用户选择要优化的算法
-    algorithm_choice = 'dbscan'  # 或者 'meanshift'
+    algorithm_choice = 'meanshift'  # 或者 'meanshift'
 
     if algorithm_choice == 'dbscan':
         # 定义 DBSCAN 参数空间
@@ -156,18 +158,22 @@ if __name__ == '__main__':
     # 使用贝叶斯优化来最小化目标函数
     result = gp_minimize(lambda params: objective_function(params, train_data, train_labels), space, n_calls=50, n_random_starts=10, random_state=42)
 
+    # 输出最佳参数
+    if algorithm_choice == 'dbscan':
+        best_eps = result.x[0]
+        best_min_samples = result.x[1]
+        print(f'最佳参数: eps={best_eps}, min_samples={best_min_samples}')
+    elif algorithm_choice == 'meanshift':
+        best_bandwidth = result.x[0]
+        print(f'最佳参数: bandwidth={best_bandwidth}')
 
-
-    # 最好的参数
-    best_eps = result.x[0]
-    best_min_samples = result.x[1]
-    print(f'最佳参数: eps={best_eps}, min_samples={best_min_samples}')
     print("最小化目标函数值: {}".format(result.fun))
 
-
-    # 利用找到的最佳参数训练最终的DBSCAN模型
-    best_clustering = DBSCAN(eps=best_eps, min_samples=int(best_min_samples))
-    # best_clustering.fit(train_data)
+    # 利用找到的最佳参数训练最终的模型
+    if algorithm_choice == 'dbscan':
+        best_clustering = DBSCAN(eps=best_eps, min_samples=int(best_min_samples))
+    elif algorithm_choice == 'meanshift':
+        best_clustering = MeanShift(bandwidth=best_bandwidth)
 
     # 输出每次迭代的损失历史
     loss_history = result.func_vals
