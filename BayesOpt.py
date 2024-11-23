@@ -98,16 +98,16 @@ def dbscan_objective(params, train_data, train_labels):
 
 # 定义 MeanShift 的目标函数，计算损失
 def meanshift_objective(params, train_data, train_labels):
-    # bandwidth = estimate_bandwidth(X, quantile=quantile, n_samples=n_samples)
 
-    bandwidth = params[0]
+    quantile, n_samples = params
     loss = {}
     
     for evtCount in train_data:
         X = train_data[evtCount]
         if X.shape[0] < 10:
             continue
-
+        
+        bandwidth = estimate_bandwidth(X, quantile=quantile, n_samples=int(n_samples))
         clustering = MeanShift(bandwidth=bandwidth)
         ms = clustering.fit(X)
         pred_labels = ms.labels_
@@ -148,9 +148,10 @@ if __name__ == '__main__':
         objective_function = dbscan_objective
 
     elif algorithm_choice == 'meanshift':
-        # 定义 MeanShift 参数空间
+       # 定义 MeanShift 参数空间
         space = [
-            Real(0.1, 10.0, name='bandwidth')
+            Real(0.1, 0.9, name='quantile'),
+            Integer(1, 500, name='n_samples')
         ]
         objective_function = meanshift_objective
 
@@ -164,17 +165,23 @@ if __name__ == '__main__':
         best_min_samples = result.x[1]
         print(f'最佳参数: eps={best_eps}, min_samples={best_min_samples}')
     elif algorithm_choice == 'meanshift':
-        best_bandwidth = result.x[0]
-        print(f'最佳参数: bandwidth={best_bandwidth}')
+        best_quantile = result.x[0]
+        best_n_samples = result.x[1]
+        print(f'最佳参数: quantile={best_quantile}, n_samples={best_n_samples}')
 
     print("最小化目标函数值: {}".format(result.fun))
 
-    # 利用找到的最佳参数训练最终的模型
-    if algorithm_choice == 'dbscan':
-        best_clustering = DBSCAN(eps=best_eps, min_samples=int(best_min_samples))
-    elif algorithm_choice == 'meanshift':
-        best_clustering = MeanShift(bandwidth=best_bandwidth)
 
     # 输出每次迭代的损失历史
     loss_history = result.func_vals
     print(f'损失历史: {loss_history}')
+
+
+    #  # 利用找到的最佳参数
+    # if algorithm_choice == 'dbscan':
+    #     best_clustering = DBSCAN(eps=best_eps, min_samples=int(best_min_samples))
+    # elif algorithm_choice == 'meanshift':
+    #     # 使用最佳参数估算带宽
+    #     X_sample = train_data[0]  # 使用第一个数据集作为示例来估算带宽
+    #     best_bandwidth = estimate_bandwidth(X_sample, quantile=best_quantile, n_samples=int(best_n_samples))
+    #     best_clustering = MeanShift(bandwidth=best_bandwidth)
