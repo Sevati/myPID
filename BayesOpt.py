@@ -103,11 +103,16 @@ def meanshift_objective(params, train_data, train_labels):
     loss = {}
     
     for evtCount in train_data:
+        # print(f'evtCount: {evtCount}')
         X = train_data[evtCount]
         if X.shape[0] < 10:
             continue
         
         bandwidth = estimate_bandwidth(X, quantile=quantile, n_samples=int(n_samples))
+        # 如果 bandwidth 为 0.0，则重新估算
+        if bandwidth < 0.1:
+            bandwidth = 0.1
+            # bandwidth = estimate_bandwidth(X, quantile=min(quantile+0.1, 1.0), n_samples=min(int(n_samples*1.5), len(X)))
         clustering = MeanShift(bandwidth=bandwidth)
         ms = clustering.fit(X)
         pred_labels = ms.labels_
