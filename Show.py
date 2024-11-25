@@ -68,7 +68,10 @@ def calculate_efficiency_and_purity(data, label_name, gt_labels, cluster_labels,
 
         data[f'{label_name}_efficiency'] = efficiency
         data[f'{label_name}_purity'] = purity
-
+        
+        efficiency_list.append(efficiency)
+        purity_list.append(purity)
+        
         # 判断寻类是否成功
         if efficiency > 0.8 and purity > 0.6:
             successful_classes += 1
