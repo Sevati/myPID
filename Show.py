@@ -48,7 +48,6 @@ def meanshift_clustering(data, quantile=0.5, n_samples=100):
 
 
 def calculate_efficiency_and_purity(data, label_name, gt_labels, cluster_labels, efficiency_list, purity_list):
-
     unique_labels = np.unique(gt_labels)  # 包括所有标签，不过滤噪声
     results = {}
     successful_classes = 0
@@ -67,36 +66,29 @@ def calculate_efficiency_and_purity(data, label_name, gt_labels, cluster_labels,
         # 计算纯度
         purity = correct_count / len(db_indices) if len(db_indices) > 0 else 0
 
-        # print(f"DBSCAN Class {label} has {correct_count} correct pairs out of {len(db_indices)} points. Efficiency: {efficiency:.2f}, Purity: {purity:.2f}")
-
-        results[label] = {'efficiency': efficiency, 'purity': purity}
-
         data[f'{label_name}_efficiency'] = efficiency
         data[f'{label_name}_purity'] = purity
 
-
-        efficiency_list.append(efficiency)
-        purity_list.append(purity)
-        
         # 判断寻类是否成功
         if efficiency > 0.8 and purity > 0.6:
             successful_classes += 1
 
     # 计算寻类成功率
     success_rate = successful_classes / len(unique_labels) if len(unique_labels) > 0 else 0
-    # print(f"Class discovery success rate: {success_rate:.2f}")
 
-    return results
+    return 
 
 def calculate_success_rate(data, label_name, gt_labels, method_labels, efficiency_list, purity_list, successful_classes, total_classes):
     # 计算效率和纯度
     results = calculate_efficiency_and_purity(data, label_name, gt_labels, method_labels, efficiency_list, purity_list)
     total_classes += len(np.unique(gt_labels))  # 包括所有真实类（噪声也算）
 
-    for label, metrics in results.items():
-        efficiency = metrics['efficiency']
-        purity = metrics['purity']
-
+    df = pd.DataFrame(data)
+    unique_data = df.drop_duplicates(subset=['trkid'])
+    unique_data = unique_data.reset_index(drop=True)
+    for k in data['trkid'].unique():
+        efficiency = unique_data[unique_data['trkid'] == k][f'{label_name}_efficiency'].values[0]
+        purity = unique_data[unique_data['trkid'] == k][f'{label_name}_efficiency'].values[0]
         if efficiency > 0.8 and purity > 0.6:
             successful_classes += 1
 
