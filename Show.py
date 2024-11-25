@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 import shutil
 import os
+from collections import defaultdict
 
 from LoadData import load_data, get_hits, reassign_labels
 from sklearn.cluster import DBSCAN, MeanShift, estimate_bandwidth
@@ -47,6 +48,7 @@ def meanshift_clustering(data, quantile=0.5, n_samples=100):
     return labels, n_clusters_
 
 
+#原始版本计算效率和纯度
 def calculate_efficiency_and_purity(data, label_name, gt_labels, cluster_labels, efficiency_list, purity_list):
     unique_labels = np.unique(gt_labels)  # 包括所有标签，不过滤噪声
     results = {}
@@ -81,9 +83,67 @@ def calculate_efficiency_and_purity(data, label_name, gt_labels, cluster_labels,
 
     return 
 
+
+#新版本计算效率和纯度
+def compute_efficiency_and_purity(data, label_name, gt_labels, method_labels, efficiency_list, purity_list):
+    def get_indices(labels):
+        indices = defaultdict(list)
+        for index, label in enumerate(labels):
+            indices[label].append(index)
+        return indices
+    unique_labels = np.unique(gt_labels)  # 包括所有标签，不过滤噪声
+    
+    # 获得每个类别的索引
+    true_indices = get_indices(gt_labels)
+    cluster_indices = get_indices(method_labels)
+
+    efficiencies = {}
+    purities = {}
+
+    # 建立真值类别和聚类结果类别之间的对应关系
+    true_to_cluster_map = {}
+
+    # 计算真值中的每个类别在聚类结果中的最大匹配类别
+    for true_class, gt_indices in true_indices.items():
+        cluster_count = defaultdict(int)
+        for idx in gt_indices:
+            cluster_count[method_labels[idx]] += 1
+        mapped_cluster = max(cluster_count, key=cluster_count.get)
+        true_to_cluster_map[true_class] = mapped_cluster
+
+    # 计算每个类别的效率和纯度
+    for true_class, mapped_cluster in true_to_cluster_map.items():
+        gt_indices = true_indices[true_class]
+        db_indices = cluster_indices[mapped_cluster]
+        
+        correct_count_efficiency = sum(1 for idx in gt_indices if method_labels[idx] == mapped_cluster)
+        correct_count_purity = sum(1 for idx in db_indices if gt_labels[idx] == true_class)
+        
+        efficiency = correct_count_efficiency / len(gt_indices) if len(gt_indices) > 0 else 0
+        purity = correct_count_purity / len(db_indices) if len(db_indices) > 0 else 0
+        
+        # print(f'{label_name}_efficiency', efficiency)
+        # print(f'{label_name}_purity', purity)
+
+        data[f'{label_name}_efficiency'] = efficiency
+        data[f'{label_name}_purity'] = purity
+        
+        efficiency_list.append(efficiency)
+        purity_list.append(purity)
+
+        for idx in gt_indices:
+            efficiencies[idx] = efficiency
+            purities[idx] = purity
+    
+    data[f'{label_name}_efficiency'] = efficiencies
+    data[f'{label_name}_purity'] = purities
+        
+    return 
+
+
 def calculate_success_rate(data, label_name, gt_labels, method_labels, efficiency_list, purity_list, successful_classes, total_classes):
     # 计算效率和纯度
-    results = calculate_efficiency_and_purity(data, label_name, gt_labels, method_labels, efficiency_list, purity_list)
+    compute_efficiency_and_purity(data, label_name, gt_labels, method_labels, efficiency_list, purity_list)
     total_classes += len(np.unique(gt_labels))  # 包括所有真实类（噪声也算）
 
     df = pd.DataFrame(data)
@@ -96,6 +156,7 @@ def calculate_success_rate(data, label_name, gt_labels, method_labels, efficienc
             successful_classes += 1
 
     return successful_classes, total_classes
+
 
 def evalute_clusters(data, evtCount, efficiency_list, purity_list, successful_classes, total_classes, label_name):
     unique_trkids = data['trkid'].unique()
@@ -252,8 +313,9 @@ def pick_failure(data):
             print(f"File copied to {dst_path}")
     return
 
+
 if __name__ == '__main__':
-    EvtNumTrain = 21
+    EvtNumTrain = 1000
     file_path = "/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/hit_2.txt"
     df_train = load_data(file_path)###
     train_data = {}
@@ -262,7 +324,7 @@ if __name__ == '__main__':
     all_purities_1,all_purities_2 = [],[]
     successful_classes_1, total_classes_1 = 0, 0
     successful_classes_2, total_classes_2 = 0, 0
-    for evtCount in range(10, EvtNumTrain):
+    for evtCount in range(EvtNumTrain):
         print(f'processing event======================: {evtCount}')
         hits = get_hits(df_train, evtCount)
         if hits.shape[0] < 10 :  
@@ -300,7 +362,4 @@ if __name__ == '__main__':
     print(f"meanshift效率均值: {mean_efficiency_ms:.2f}")
     print(f"meanshift纯度均值: {mean_purity_ms:.2f}")
     print(f"meanshift成功率: {efficiency_2:.2f}")
-
-
-
 
