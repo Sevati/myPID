@@ -22,6 +22,45 @@ from LoadData import load_data, get_hits, processing_data, reassign_labels
 EvtNumTrain = 10
 file_path = "/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/hit_2.txt"
 df_train = load_data(file_path)
+# 定义公差
+radius_tolerance = 50  # 半径容许偏差
+center_tolerance = 50  # 圆心容许距离
+tolerance = {'center': 50, 'radius': 50}
+
+
+def recursive_merge(circle_params, tolerance):
+    ''' 递归合并相近的圆圈参数 '''
+    merge_occurred = False
+    n = len(circle_params)
+    
+    # 创建一个合并映射
+    merge_map = list(range(n))
+    
+    for i in range(n):
+        for j in range(i + 1, n):
+            x0_i, y0_i, r_i = circle_params[i][:3]
+            x0_j, y0_j, r_j = circle_params[j][:3]
+            
+            if (abs(x0_i - x0_j) < tolerance['center'] and 
+                abs(y0_i - y0_j) < tolerance['center'] and 
+                abs(r_i - r_j) < tolerance['radius']):
+                
+                merge_map[j] = merge_map[i]
+                merge_occurred = True
+    
+    # 生成新的圆参数列表
+    merged_circle_params = []
+    for idx in set(merge_map):
+        indices = [i for i, x in enumerate(merge_map) if x == idx]
+        cluster_points = np.concatenate([circle_params[i][3] for i in indices], axis=0)
+        x, y = cluster_points[:, 0], cluster_points[:, 1]
+        x0, y0, r = initial_guess(x, y)
+        merged_circle_params.append((x0, y0, r, cluster_points))
+
+    if merge_occurred:
+        return recursive_merge(merged_circle_params, tolerance)
+    else:
+        return merged_circle_params
 
 
 def circle_residuals(params, x, y):
@@ -37,11 +76,19 @@ def initial_guess(x, y):
     return x0, y0, r
 
 
-def plot_circle(x0, y0, r):
-    theta = np.linspace(0, 2*np.pi, 100)
-    x = x0 + r * np.cos(theta)
-    y = y0 + r * np.sin(theta)
-    plt.plot(x, y, 'b-', label='Fitted Circle')
+def plot_circles(ax2, circle_params):
+    ''' 在轴上绘制圆弧 '''
+    for x0, y0, r, cluster_points in circle_params:
+        angles = np.arctan2(cluster_points[:, 1] - y0, cluster_points[:, 0] - x0) * 180 / np.pi
+        theta1, theta2 = np.min(angles), np.max(angles)
+        arc = Arc([x0, y0], 2*r, 2*r, angle=0, theta1=theta1, theta2=theta2, color=col, linewidth=2)
+        ax2.add_patch(arc)
+    plt.scatter(coords[:,0], coords[:,1], color='blue', marker='.', label='Original Points')
+        # 设置图示
+    ax2.set_xlabel('X coordinate')
+    ax2.set_ylabel('Y coordinate')
+    ax2.set_title('Circle Fitting to the Given Points')
+    ax2.legend()
 
 
 if __name__ == '__main__':
@@ -49,17 +96,14 @@ if __name__ == '__main__':
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values
         para_coords = hits[['finalX', 'finalY']].values
-        
         mct_labels = hits['trkid'].values
-        # 设定误差阈值
-        threshold = 0.5
-        
-        bandwidth = estimate_bandwidth(para_coords, quantile=0.1, n_samples=500)
+        bandwidth = estimate_bandwidth(para_coords, quantile=0.3, n_samples=200)
         # 应用MeanShift算法
         ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
         ms.fit(para_coords)
         labels = ms.labels_
-        cluster_centers = ms.cluster_centers_
+        # cluster_centers = ms.cluster_centers_
+
         labels_unique = np.unique(labels)
         n_clusters = len(labels_unique)
         print('Estimated number of clusters: %d' % n_clusters)
@@ -69,53 +113,34 @@ if __name__ == '__main__':
         colors = cycle('bgrcmykbgrcmykbgrcmykbgrcmyk')
         for k, col in zip(range(n_clusters), colors):
             my_members = labels == k
-            cluster_center = cluster_centers[k]
+            # cluster_center = cluster_center[k]
             ax1.plot(coords[my_members, 0], coords[my_members, 1], col + '.')
-            ax1.plot(cluster_center[0], cluster_center[1], 'o', markerfacecolor=col,
-                     markeredgecolor='k', markersize=14)
+            # ax1.plot(cluster_center[0], cluster_center[1], 'o', markerfacecolor=col,
+            #          markeredgecolor='k', markersize=14)
         ax1.set_title('Clustering Results')
         ax1.set_xlabel('X coordinate')
         ax1.set_ylabel('Y coordinate')
         ax1.set_aspect('equal', adjustable='datalim')
-
-        # 对每个簇的数据点拟合圆弧
+       
+        # 初始化圆心和半径列表
+        circle_params = []
+        merged_labels = labels.copy()
+        
+        # 初步拟合每个簇的数据点为圆弧
         for k, col in zip(range(n_clusters), colors):
             cluster_points = coords[labels == k]
             x = cluster_points[:, 0]
             y = cluster_points[:, 1]
             x0, y0, r = initial_guess(x, y)
             print(f"Cluster {k}: Center=({x0}, {y0}), Radius={r}")
-            angles = np.arctan2(y - y0, x - x0) * 180 / np.pi
-            theta1, theta2 = np.min(angles), np.max(angles)
-            arc = Arc([x0, y0], 2*r, 2*r, angle=0, theta1=theta1, theta2=theta2, color=col, linewidth=2)
-            ax2.add_patch(arc)
-
-        ax2.scatter(x, y, color='blue', label='Data Points')
+            circle_params.append((x0, y0, r, cluster_points))
         
-        ax2.set_title('Fitted Circles to Each Cluster')
-        ax2.set_xlabel('X coordinate')
-        ax2.set_ylabel('Y coordinate')
-        
-        plt.scatter(coords[:,0], coords[:,1], label='Original Points')
-
-        
-        # 设置图示
-        ax2.set_xlabel('X coordinate')
-        ax2.set_ylabel('Y coordinate')
-        ax2.set_title('Circle Fitting to the Given Points')
-        ax2.legend()
-
-        # 使x和y轴等比例显示
+        final_circles = recursive_merge(circle_params, tolerance)
+        plot_circles(ax2, final_circles)
         ax2.set_aspect('equal', adjustable='datalim')
-        # 显示图形
-
-        plt.grid(True)
-        plt.tight_layout()
         # plt.show()
         plt.savefig('/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results/axs_fit/event' + str(evtCount) + '.jpg')
         plt.close()
-
-
 
 
 
