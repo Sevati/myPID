@@ -4,7 +4,9 @@ from scipy.optimize import least_squares
 # from bayesian_optimization import BayesianOptimization
 from scipy.optimize import minimize
 from sklearn.cluster import MeanShift, estimate_bandwidth
-
+from itertools import cycle
+from matplotlib.patches import Arc
+import math
 
 import os
 import sys
@@ -17,13 +19,15 @@ from LoadData import load_data, get_hits, processing_data, reassign_labels
 #     print("Error importing LoadData module: ", e)
 #     sys.exit(1)
 
-EvtNumTrain = 1
+EvtNumTrain = 10
 file_path = "/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/hit_2.txt"
 df_train = load_data(file_path)
+
 
 def circle_residuals(params, x, y):
     x0, y0, r = params
     return np.sqrt((x - x0)**2 + (y - y0)**2) - r
+
 
 def initial_guess(x, y):
     x_m, y_m = np.mean(x), np.mean(y)
@@ -33,132 +37,83 @@ def initial_guess(x, y):
     return x0, y0, r
 
 
-# # 定义圆弧方程的残差
-# def residuals(params, coords):
-#     x0, y0= params
-#     x, y = coords.T
-#     r = np.sqrt(x0**2 + y0**2)  # 半径等于圆心到原点的距离
-
-#     return np.sqrt((x - x0)**2 + (y - y0)**2) - r
-
-# # 拟合圆弧的函数
-# def fit_circle(coords):
-#     # 初始参数估计
-#     x_m, y_m = np.mean(coords, axis=0)
-#     initial_params = np.array([x_m, y_m])#, np.mean(np.sqrt((coords[:, 0] - x_m)**2 + (coords[:, 1] - y_m)**2))])
-    
-#     result = least_squares(residuals, initial_params, args=(coords,))
-#     x0, y0 = result.x
-#     return x0, y0, np.sqrt(result.x[0]**2 + result.x[1]**2)
-
-
-# def calculate_residuals(circle_params, coords):
-#     # 计算误差，每个点到圆的距离
-#     x0, y0 = circle_params
-#     x, y = coords.T
-#     radial_distances = np.sqrt((x - x0)**2 + (y - y0)**2)
-#     r = np.sqrt(x0**2 + y0**2)  # 圆心到原点的距离作为半径
-#     return np.sum((radial_distances - r)**2)
-
-
-# def fit_circle_to_origin(coords):
-#     # 初始猜测：使用所有点的均值作为圆心的初始值
-#     initial_guess = np.mean(coords, axis=0)
-
-#     result = minimize(calculate_residuals, initial_guess, args=(coords,), method='BFGS')
-    
-#     x0, y0 = result.x
-#     r = np.sqrt(x0**2 + y0**2)  # 计算拟合的半径
-#     return x0, y0, r
-
-# # 判断点是否在圆弧上（在误差范围内）
-# def points_on_arc(coords, params, threshold):
-#     x0, y0, r = params
-#     x, y = coords.T
-#     distances = np.sqrt((x - x0)**2 + (y - y0)**2)
-#     return np.abs(distances - r) < threshold
-
 def plot_circle(x0, y0, r):
     theta = np.linspace(0, 2*np.pi, 100)
     x = x0 + r * np.cos(theta)
     y = y0 + r * np.sin(theta)
     plt.plot(x, y, 'b-', label='Fitted Circle')
 
+
 if __name__ == '__main__':
     for evtCount in range(EvtNumTrain):
         hits = get_hits(df_train, evtCount)
-        coords = hits[['tx', 'ty']].values
-
+        coords = hits[['x', 'y']].values
+        para_coords = hits[['finalX', 'finalY']].values
+        
         mct_labels = hits['trkid'].values
         # 设定误差阈值
         threshold = 0.5
         
-        bandwidth = estimate_bandwidth(coords, quantile=0.47, n_samples=53)
+        bandwidth = estimate_bandwidth(para_coords, quantile=0.1, n_samples=500)
         # 应用MeanShift算法
         ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
-        ms.fit(coords)
+        ms.fit(para_coords)
         labels = ms.labels_
         cluster_centers = ms.cluster_centers_
         labels_unique = np.unique(labels)
         n_clusters = len(labels_unique)
-        
-        plt.title('Estimated number of clusters: %d' % n_clusters)
-        plt.show()
+        print('Estimated number of clusters: %d' % n_clusters)
+
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+        #绘制子图1：聚类结果
+        colors = cycle('bgrcmykbgrcmykbgrcmykbgrcmyk')
+        for k, col in zip(range(n_clusters), colors):
+            my_members = labels == k
+            cluster_center = cluster_centers[k]
+            ax1.plot(coords[my_members, 0], coords[my_members, 1], col + '.')
+            ax1.plot(cluster_center[0], cluster_center[1], 'o', markerfacecolor=col,
+                     markeredgecolor='k', markersize=14)
+        ax1.set_title('Clustering Results')
+        ax1.set_xlabel('X coordinate')
+        ax1.set_ylabel('Y coordinate')
+        ax1.set_aspect('equal', adjustable='datalim')
+
         # 对每个簇的数据点拟合圆弧
-        for k in range(n_clusters):
+        for k, col in zip(range(n_clusters), colors):
             cluster_points = coords[labels == k]
             x = cluster_points[:, 0]
             y = cluster_points[:, 1]
             x0, y0, r = initial_guess(x, y)
             print(f"Cluster {k}: Center=({x0}, {y0}), Radius={r}")
+            angles = np.arctan2(y - y0, x - x0) * 180 / np.pi
+            theta1, theta2 = np.min(angles), np.max(angles)
+            arc = Arc([x0, y0], 2*r, 2*r, angle=0, theta1=theta1, theta2=theta2, color=col, linewidth=2)
+            ax2.add_patch(arc)
 
-        # x = coords[:, 0]
-        # y = coords[:, 1]
-
-        # x0, y0, r = initial_guess(x, y)
-        # # x0, y0 = params
-        # print(f"Fitted circle parameters: Center=({x0}, {y0}), Radius={r}")
-
-        # 迭代拟合圆弧并绘制结果
-        # remaining_coords = coords.copy()
-        # iteration = 1
+        ax2.scatter(x, y, color='blue', label='Data Points')
         
-
-        # while len(remaining_coords) > 0:
-        #     params = fit_circle(remaining_coords)
-        #     on_arc = points_on_arc(remaining_coords, params, threshold)
-    
-        #     if np.any(on_arc):
-        #         plt.plot(
-        #             [remaining_coords[on_arc, 0].min(), remaining_coords[on_arc, 0].max()],
-        #             [remaining_coords[on_arc, 1].min(), remaining_coords[on_arc, 1].max()],
-        #             label=f'Fit Arc {iteration}'
-        #         )
-        #         remaining_coords = remaining_coords[~on_arc]  # 删除已经拟合上的点
-        #     else:
-        #         break
-        #     iteration += 1
-        fig, ax = plt.subplots()
-        ax.scatter(x, y, color='blue', label='Data Points')
-
-        plt.figure()
+        ax2.set_title('Fitted Circles to Each Cluster')
+        ax2.set_xlabel('X coordinate')
+        ax2.set_ylabel('Y coordinate')
+        
         plt.scatter(coords[:,0], coords[:,1], label='Original Points')
 
-        # 绘制拟合的圆
-        circle = plt.Circle((x0, y0), r, color='red', fill=False, linewidth=2, label='Fitted Circle')
-        ax.add_artist(circle)
+        
         # 设置图示
-        ax.set_xlabel('X coordinate')
-        ax.set_ylabel('Y coordinate')
-        ax.set_title('Circle Fitting to the Given Points')
-        ax.legend()
+        ax2.set_xlabel('X coordinate')
+        ax2.set_ylabel('Y coordinate')
+        ax2.set_title('Circle Fitting to the Given Points')
+        ax2.legend()
 
         # 使x和y轴等比例显示
-        ax.set_aspect('equal', adjustable='datalim')
-        plt.grid(True)
-
+        ax2.set_aspect('equal', adjustable='datalim')
         # 显示图形
-        plt.show()
+
+        plt.grid(True)
+        plt.tight_layout()
+        # plt.show()
+        plt.savefig('/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results/axs_fit/event' + str(evtCount) + '.jpg')
+        plt.close()
 
 
 
