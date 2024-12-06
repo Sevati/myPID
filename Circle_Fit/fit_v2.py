@@ -184,7 +184,7 @@ def process_clusters(hits, threshold, initial_quantile=0.5, n_samples=100):
 def merge_tracks(track1, track2, threshold_radius=10, threshold_center=10, threshold_distance=20):
     """
     判断两条径迹是否可能来自同一个圆, 如果是，则合并它们并重新拟合圆弧. 
-    在判断两条径迹是否可能来自同一个圆时,考虑以下因素: 1.圆心和半径的偏差 2.径迹之间的整体距离 3.合并后平均置信度是否提高 
+    在判断两条径迹是否可能来自同一个圆时,考虑以下因素: 1.圆心和半径的偏差 2.径迹之间的整体距离 3.合并后置信度是否提高 
     参数：
     track1, track2: 两条径迹的数据点 (numpy 数组)
     threshold_radius: 圆的半径差异阈值
@@ -230,7 +230,21 @@ def merge_tracks(track1, track2, threshold_radius=10, threshold_center=10, thres
     if merged_confidence > average_initial_confidence:
         print(f"Track1 and Track2 merged due to improved confidence.")
         return merged_xc, merged_yc, merged_r
-    
+    #4. 判断较低置信度的径迹是否可以用较高置信度的径迹的圆心和半径来计算
+    if confidence1 >= confidence2:
+        # 使用 track1 的圆心和半径计算 track2 的置信度
+        track2_confidence, _ = compute_confidence(track2, xc1, yc1, r1)
+        if track2_confidence > confidence2:
+            merged_points = np.vstack((track1, track2))
+            return fit_arc(merged_points)
+    else:
+        # 使用 track2 的圆心和半径计算 track1 的置信度
+        track1_confidence, _ = compute_confidence(track1, xc2, yc2, r2)
+        if track1_confidence > confidence1:
+            merged_points = np.vstack((track1, track2))
+            return fit_arc(merged_points)
+        
+
     # 如果所有条件都不满足，则返回 None
     return None
 
