@@ -80,7 +80,7 @@ def process_clusters(hits, threshold, initial_quantile=0.5, n_samples=100):
     para_coords = hits[['finalX', 'finalY']].values
     quantile = initial_quantile
     # min_samples = 25
-    previous_confidences = None
+    previous_confidences = 0
     retries = 0
     while True:   #调参
         # 使用 MeanShift 聚类
@@ -153,6 +153,26 @@ def process_clusters(hits, threshold, initial_quantile=0.5, n_samples=100):
         # 如果所有圆弧的置信度都高于阈值，退出
         if all_above_threshold:
             break
+       
+
+       
+        # else:
+        #     track_data = {}
+        #     all_confidences = []
+        #     labels = np.zeros(points.shape[0])
+        #     Hits_R,labels = run_RANSAC(hits)
+        #     # 对每个聚类，拟合圆弧并计算置信度
+        #     for cluster_label in np.unique(labels):
+        #         cluster_points = points[labels == cluster_label]
+        #         if cluster_points.shape[0] < 10:
+        #             continue
+        #         xc, yc, r = fit_arc(cluster_points)
+        #         confidence, _ = compute_confidence(cluster_points, xc, yc, r)
+        #         all_confidences.append((cluster_label, xc, yc, r, confidence))
+        #         track_data[cluster_label] = cluster_points  # 保存聚类的点
+        #     break
+
+
 
         # 检查置信度是否有提高
         current_confidences = [confidence for _, _, _, _, confidence in all_confidences]
@@ -176,7 +196,9 @@ def process_clusters(hits, threshold, initial_quantile=0.5, n_samples=100):
         quantile = max(0.1, quantile)  # 确保 quantile 不小于0.1
         # min_samples -= 1
         # min_samples = max(2, min_samples)  # 确保 min_samples 不小于2
+    
 
+    
     return labels, all_confidences
 
 
@@ -249,6 +271,93 @@ def merge_tracks(track1, track2, threshold_radius=10, threshold_center=10, thres
     return None
 
 
+#用ransac聚类
+from sklearn.linear_model import RANSACRegressor
+from sklearn import linear_model
+from sklearn.preprocessing import PolynomialFeatures
+from sklearn.pipeline import make_pipeline
+from sklearn.metrics import mean_squared_error, r2_score
+
+
+def RANSAC(Hits):
+  R = Hits['R'].values.reshape(-1,1)
+  Phi = Hits['Phi'].values.reshape(-1,1)
+  ransac = linear_model.RANSACRegressor()
+  ransac.fit(R,Phi)
+  inlier_mask = ransac.inlier_mask_
+  Hits['tag']=inlier_mask
+  return Hits
+
+def merge_labels(df):
+  label_layers = df.groupby('tag')['layer'].apply(set).reset_index()
+  label_layers['length'] = label_layers['layer'].apply(len)
+  tag_list = label_layers.sort_values('length')['tag'].tolist()
+  group_combinations = []
+  loop = 1
+  for i in tag_list:  # i,j is tag
+    candidate = []
+    for j in tag_list[loop:]:
+          common_layers = len(label_layers.loc[label_layers['tag'] == i, 'layer'].values[0].intersection(label_layers.loc[label_layers['tag'] == j, 'layer'].values[0]))
+          if common_layers < 3:  # same layers must <3 when merge
+              candidate.append(j)
+    if len(candidate) ==0:
+       loop+=1
+       continue
+    elif len(candidate) ==1:
+       df.loc[df['tag'] == candidate[0], 'tag'] = i
+       #print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$1')
+       return df, True
+    else:
+       if 'Phi' not in df.columns:
+         df['Phi']=''
+         for m in range(df.shape[0]):
+           x=df.loc[m,'x']
+           y=df.loc[m,'y']
+           df.loc[m,'Phi'] = np.arctan2(y,x)
+       diff0 = 10
+       phi_avg1 = df[df['tag'] == i]['Phi'].mean()
+       for k in candidate:
+          phi_avg2 = df[df['tag'] == k]['Phi'].mean()
+          diff = abs(phi_avg1 - phi_avg2)
+          if diff < diff0:
+             diff0 = diff
+             win = k
+       df.loc[df['tag'] == win, 'tag'] = i
+       #print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$2')
+       return df, True
+  return df, False
+
+def run_RANSAC(Hits):
+  Hits['R']=''  # R
+  Hits['Phi']=''  # Phi
+  for i in range(Hits.shape[0]):
+     x=Hits.loc[i,'x']
+     y=Hits.loc[i,'y']
+     Hits['Phi'] = np.arctan2(Hits['y'], Hits['x'])
+     Hits['R'] = np.sqrt(Hits['x']**2 + Hits['y']**2)
+  label=1
+  subHits = Hits.copy()
+  Hits['tag'] = False
+  while(subHits.shape[0] > 15):
+     subHits = RANSAC(subHits)
+     subHits.loc[subHits['tag'] == True] = label
+     Hits.loc[Hits['tag'] == False, 'tag'] = subHits['tag']
+     subHits = Hits[Hits['tag'] ==False]
+     label += 1
+  Hits.loc[Hits['tag'] == False, 'tag'] = label #have noise
+  #remove noise class,layer >3
+  Hits = Hits.groupby('tag').filter(lambda x: x['layer'].nunique() > 3 )
+  Hits = Hits.reset_index(drop=True)
+
+  #*******************merge cluster*************************
+  #Hits = Hits[Hits['tag'] != False].reset_index(drop=True)#no noise
+  merged = True
+  while merged:
+     Hits, merged = merge_labels(Hits)
+  #**********************************************************
+  return Hits,Hits['tag'].values
+
+
 # 可视化
 def visualize_clusters(evtCount, points, labels, confidences):
     fig, ax = plt.subplots(figsize=(10, 10))
@@ -275,6 +384,18 @@ def visualize_clusters(evtCount, points, labels, confidences):
             angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
             theta1, theta2 = np.min(angles), np.max(angles)
 
+            # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
+            if theta2 - theta1  > 180 and (theta1 * theta2 < 0) :
+                # 计算跨越 180° 时的角度范围
+                angles_positive = np.where(angles < 0, angles + 360, angles)
+                theta1, theta2 = np.min(angles_positive), np.max(angles_positive)
+                if (theta2 - theta1) > 180:
+                    # 计算新的角度范围，要确保它们通过正确的小弧
+                    theta1, theta2 = theta2, theta1 + 360
+
+                
+
+
             # 获取对应聚类的颜色
             cluster_color = cmap(cluster_label % len(np.unique(labels)))
 
@@ -294,7 +415,7 @@ def visualize_clusters(evtCount, points, labels, confidences):
 
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (7,8):#(EvtNumTrain):
+    for evtCount in range (36,37):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values
