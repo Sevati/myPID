@@ -75,7 +75,7 @@ def compute_confidence(points, xc, yc, r):
 
 # Step 4: 调整 MeanShift 直到所有圆弧的置信度都高于阈值
 # def process_clusters(hits, threshold, eps=0.124, min_samples=25):
-def process_clusters(hits, threshold, initial_quantile=0.5, n_samples=100):
+def process_clusters(hits, threshold, initial_quantile=0.45, n_samples=84):
     points = hits[['x', 'y']].values
     para_coords = hits[['finalX', 'finalY']].values
     quantile = initial_quantile
@@ -382,8 +382,31 @@ def visualize_clusters(evtCount, points, labels, confidences):
             
             # 计算每个点的角度
             angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
-            theta1, theta2 = np.min(angles), np.max(angles)
+            
+            # # 计算角度的均值和标准差
+            # mean_angle = np.mean(angles)
+            # std_angle = np.std(angles)
+            # # 设置一个阈值，去除离均值超过两倍标准差的点
+            # threshold = std_angle
+            # angles = angles[np.abs(angles - mean_angle) <= threshold]
 
+            # 将负角度转换为正值
+            angles_positive = np.where(angles < 0, angles + 360, angles)
+            # 排序
+            angles_sorted = np.sort(angles_positive)
+            diffs = np.diff(angles_sorted)
+            # 设定阈值（根据实际需要调整）
+            threshold = 90  # 这里假设一个角度值与相邻角度相差超过90度就视为异常
+            # 寻找超过阈值的差异
+            outliers_indices = np.where(diffs > threshold)[0]
+            outliers = angles_sorted[outliers_indices]  # 加1因为diff计算结果的索引是低一位的
+            # 删除原始角度中相对应的异常值
+            angles = np.array([angle for angle in angles if angle not in outliers])
+
+
+
+            theta1, theta2 = np.min(angles), np.max(angles)
+            
             # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
             if theta2 - theta1  > 180 and (theta1 * theta2 < 0) :
                 # 计算跨越 180° 时的角度范围
@@ -415,7 +438,7 @@ def visualize_clusters(evtCount, points, labels, confidences):
 
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (36,37):#(EvtNumTrain):
+    for evtCount in range (55,56):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values
