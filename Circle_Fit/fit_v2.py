@@ -395,30 +395,46 @@ def visualize_clusters(evtCount, points, labels, confidences):
             # 排序
             angles_sorted = np.sort(angles_positive)
             diffs = np.diff(angles_sorted)
+            diffs = np.diff(angles_sorted, prepend=angles_sorted[-1] - 360, append=angles_sorted[0] + 360)
+
             # 设定阈值（根据实际需要调整）
             threshold = 90  # 这里假设一个角度值与相邻角度相差超过90度就视为异常
             # 寻找超过阈值的差异
-            outliers_indices = np.where(diffs > threshold)[0]
-            outliers = angles_sorted[outliers_indices]  # 加1因为diff计算结果的索引是低一位的
-            # 删除原始角度中相对应的异常值
-            angles = np.array([angle for angle in angles if angle not in outliers])
+            # outliers_indices = np.where(diffs > threshold)[0]
+            # outliers = angles_sorted[outliers_indices]
+            # # 删除原始角度中相对应的异常值
+            # angles = np.array([angle for angle in angles if angle not in outliers])
+            
+            # original_outliers = np.intersect1d(angles, outliers)
+            # indices_to_remove = np.where(np.isin(angles, original_outliers))[0]
+            # filtered_cluster_points = np.delete(cluster_points, indices_to_remove, axis=0)
 
 
+            indices_to_remove = []
+            for i in range(len(diffs)):
+                # 检查前一个和后一个差值
+                prev_diff = diffs[i - 1] if i > 0 else diffs[-1]
+                next_diff = diffs[i + 1] if i < len(diffs) - 1 else diffs[0]
+                if prev_diff > threshold and next_diff > threshold:
+                    indices_to_remove.append(i)
+                    print(f"----Outlier found at index {i} with angle {angles_sorted[i]}----")
+            # 从 cluster_points 删除对应的点
+            filtered_cluster_points = np.delete(cluster_points, indices_to_remove, axis=0)
+            angles = np.delete(angles, indices_to_remove, axis=0)
+            #重新拟合弧线
+            # confidences[2:4] = fit_arc(filtered_cluster_points)
 
             theta1, theta2 = np.min(angles), np.max(angles)
-            
+
             # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
-            if theta2 - theta1  > 180 and (theta1 * theta2 < 0) :
+            if theta2 - theta1  > 180 and (theta1 * theta2 < 0) and theta2 > 90 and theta1 < -90:   #落在第二三象限，需要反向
                 # 计算跨越 180° 时的角度范围
-                angles_positive = np.where(angles < 0, angles + 360, angles)
-                theta1, theta2 = np.min(angles_positive), np.max(angles_positive)
+                theta1, theta2 = np.max(angles_positive), np.min(angles_positive)
                 if (theta2 - theta1) > 180:
                     # 计算新的角度范围，要确保它们通过正确的小弧
                     theta1, theta2 = theta2, theta1 + 360
 
                 
-
-
             # 获取对应聚类的颜色
             cluster_color = cmap(cluster_label % len(np.unique(labels)))
 
@@ -438,7 +454,7 @@ def visualize_clusters(evtCount, points, labels, confidences):
 
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (55,56):#(EvtNumTrain):
+    for evtCount in range (EvtNumTrain):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values
