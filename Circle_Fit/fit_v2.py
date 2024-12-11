@@ -387,12 +387,31 @@ def visualize_clusters(evtCount, points, labels, confidences):
             angles_positive = np.where(angles < 0, angles + 360, angles)
             sorted_indices = np.argsort(angles_positive)
             angles_sorted = np.sort(angles_positive)
-            diffs = np.diff(angles_sorted)
+            # diffs = np.diff(angles_sorted)
             diffs = np.diff(angles_sorted, prepend=angles_sorted[-1] - 360, append=angles_sorted[0] + 360)
 
-            # 设定阈值（根据实际需要调整）
-            threshold = 90  # 这里假设一个角度值与相邻角度相差超过90度就视为异常
 
+
+            # Q1 = np.percentile(diffs, 25)
+            # Q3 = np.percentile(diffs, 75)
+            # IQR = Q3 - Q1
+            # # 找到异常值的索引
+            # outliers_iqr = np.where((diffs > Q3 + 20 * IQR)&(diffs > 20))[0]
+            # if len(outliers_iqr)>0 :
+            #     # 删除异常值和对应的角度
+            #     actual_indices_to_remove = sorted_indices[outliers_iqr]
+            #     angles = np.delete(angles, actual_indices_to_remove, axis=0)
+            #     angles_positive = np.where(angles < 0, angles + 360, angles)
+            #     filtered_cluster_points = np.delete(cluster_points, actual_indices_to_remove, axis=0)
+            #     print(f"----Outlier found angle {angles[[outliers_iqr]]}----")
+            #     #重新拟合弧线
+            #     xc, yc, r = fit_arc(filtered_cluster_points)
+            #     angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
+            #     angles_positive = np.where(angles < 0, angles + 360, angles)
+
+
+
+            threshold = 90  # 异常值阈值
             indices_to_remove = []
             for i in range(len(diffs)):
                 # 检查前一个和后一个差值
@@ -404,18 +423,17 @@ def visualize_clusters(evtCount, points, labels, confidences):
                     else:
                         indices_to_remove.append(i)
                     print(f"----Outlier found at index {i} with angle {angles_sorted[i-1]}----")
-            # 从 cluster_points 删除对应的点
+            # 从 cluster_points 删除 对应的点
             actual_indices_to_remove = sorted_indices[indices_to_remove]
-            filtered_cluster_points = np.delete(cluster_points, actual_indices_to_remove, axis=0)
-
-            # filtered_cluster_points = np.delete(cluster_points, indices_to_remove, axis=0)#####
+            filtered_cluster_points = np.delete(cluster_points, actual_indices_to_remove, axis=0)   
             angles_positive = np.delete(angles_sorted, indices_to_remove, axis=0)
 
-            #重新拟合弧线
+            # 重新拟合弧线
             xc, yc, r = fit_arc(filtered_cluster_points)
             angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
             angles_positive = np.where(angles < 0, angles + 360, angles)
-
+            
+            
             theta1, theta2 = np.min(angles), np.max(angles)
             # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
             if theta2 - theta1  > 180 and (theta1 * theta2 < 0) and theta2 > 90 and theta1 < -90:   
@@ -442,7 +460,7 @@ def visualize_clusters(evtCount, points, labels, confidences):
 
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (954,955):#(EvtNumTrain):
+    for evtCount in range (EvtNumTrain):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values
