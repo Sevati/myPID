@@ -29,7 +29,7 @@ df_train = load_data(file_path)
 # center_tolerance = 50  # 圆心容许距离
 tolerance = {'center': 10, 'radius': 10, 'dist': 20}
 max_retries = 5  # 最大重试次数
-cluster_method = 'dbscan' #'dbscan' or 'meanshift'
+cluster_method = 'mct' #'dbscan' or 'meanshift'
 threshold = 0.2   #置信度阈值
 
 # Step 1: MeanShift聚类
@@ -89,15 +89,16 @@ def process_clusters(hits, initial_quantile=0.45, n_samples=84):
     elif cluster_method == 'meanshift':
         initial_quantile=0.45
         n_samples=84
-    else:
-        print("Invalid cluster method. Please choose from 'dbscan' or'meanshift'.")
-        return None
+    # else:
+    #     print("Invalid cluster method. Please choose from 'dbscan' or'meanshift'.")
+    #     return None
     
 
     
     while True:   #调参
         # Step 1: 聚类
-        labels = mean_shift_clustering(para_coords, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(para_coords, eps, min_samples)
+        # labels = mean_shift_clustering(para_coords, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(para_coords, eps, min_samples)
+        labels = hits['trkid']
         all_confidences = []
         track_data = {}
 
@@ -421,57 +422,71 @@ def visualize_clusters(evtCount, points, labels, confidences):
 
 
 
-            threshold = 90  # 异常值阈值
+            threshold = 50  # 异常值阈值
             indices_to_remove = []
-            for i in range(len(diffs)):
-                # 检查前一个和后一个差值
-                prev_diff = diffs[i - 1] if i > 0 else diffs[-1]
-                next_diff = diffs[i + 1] if i < len(diffs) - 1 else diffs[0]
-                if prev_diff > threshold and next_diff > threshold:
-                    if i > 0:
-                        indices_to_remove.append(i-1)  # 删除前一个点
+            outlier_indices = [i for i, diff in enumerate(diffs) if diff > threshold]
+            if len(outlier_indices) > 1:
+                indices_to_remove = [i for i in outlier_indices if i+1 in outlier_indices]
+                outlier_indices = [i for i in outlier_indices if i not in indices_to_remove and i - 1 not in indices_to_remove and i + 1 not in indices_to_remove]
+                # # 删除首尾
+                # if len(outlier_indices) > 1:
+                #     outlier_indices.remove(0) if 0 in outlier_indices else None
+                #     outlier_indices.remove(len(diffs)-1) if len(diffs)-1 in outlier_indices else None
+            
+                # Step 4: 检查剩余点的区间范围
+                while len(outlier_indices) > 1:
+                    start, end = outlier_indices[0], outlier_indices[1]
+                    if end - start <= 10:
+                        indices_to_remove.extend(range(start, end))  # 添加区间范围内的点
+                        outlier_indices = outlier_indices[2:] 
                     else:
-                        indices_to_remove.append(i)
-                    print(f"----Outlier found at index {i} with angle {angles_sorted[i-1]}----")
+                        outlier_indices.remove(start)
+                print(f"indices_to_remove: {indices_to_remove}") if len(indices_to_remove) > 0 else None
+    
             # 从 cluster_points 删除对应的点
             actual_indices_to_remove = sorted_indices[indices_to_remove]
             filtered_cluster_points = np.delete(cluster_points, actual_indices_to_remove, axis=0)   
             angles_positive = np.delete(angles_sorted, indices_to_remove, axis=0)
 
-            # 重新拟合弧线
-            xc, yc, r = fit_arc(filtered_cluster_points)
-            angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
-            angles_positive = np.where(angles < 0, angles + 360, angles)
+            if len(filtered_cluster_points)>10:
+                # 重新拟合弧线
+                xc, yc, r = fit_arc(filtered_cluster_points)
+                angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
+                angles_positive = np.where(angles < 0, angles + 360, angles)
+
+                #重新计算置信度
+                confidence, _ = compute_confidence(filtered_cluster_points, xc, yc, r)
             
-            
-            theta1, theta2 = np.min(angles), np.max(angles)
-            # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
-            if theta2 - theta1  > 180 and (theta1 * theta2 < 0) and theta2 > 90 and theta1 < -90:   
-                if np.all((angles <= -90) | (angles >= 90)) or np.all(angles >= -90) or np.all((angles <= -90) | (angles >= 0)) or np.all((angles <= 0) | (angles >= 90)):  #全部在2、3象限 或 全部在1、2、4象限 或 全部在1、2、3象限 或全部在2、3、4象限
-                    # 计算跨越 180° 时的角度范围
-                    theta1, theta2 = np.min(angles_positive), np.max(angles_positive)
+                theta1, theta2 = np.min(angles), np.max(angles)
+                # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
+                if theta2 - theta1  > 180 and (theta1 * theta2 < 0) and theta2 > 90 and theta1 < -90:   
+                    if np.all((angles <= -90) | (angles >= 90)) or np.all(angles >= -90) or np.all((angles <= -90) | (angles >= 0)) or np.all((angles <= 0) | (angles >= 90)):  #全部在2、3象限 或 全部在1、2、4象限 或 全部在1、2、3象限 或全部在2、3、4象限
+                        # 计算跨越 180° 时的角度范围
+                        theta1, theta2 = np.min(angles_positive), np.max(angles_positive)
                 
-            # 获取对应聚类的颜色
-            cluster_color = cmap(cluster_label % len(np.unique(labels)))
+                # 获取对应聚类的颜色
+                cluster_color = cmap(cluster_label % len(np.unique(labels)))
 
-            # 计算圆弧的x, y坐标
-            theta = np.linspace(np.radians(theta1), np.radians(theta2), 100)
-            x = xc + r * np.cos(theta)
-            y = yc + r * np.sin(theta)
+                # 计算圆弧的x, y坐标
+                theta = np.linspace(np.radians(theta1), np.radians(theta2), 100)
+                x = xc + r * np.cos(theta)
+                y = yc + r * np.sin(theta)
 
-            # 使用 plt.plot 显示圆弧，并添加置信度到图例
-            ax.plot(x, y, label=f'Cluster {cluster_label} (Confidence: {confidence:.2f})', color=cluster_color, linewidth=2)
+                # 使用 plt.plot 显示圆弧，并添加置信度到图例
+                ax.plot(x, y, label=f'Cluster {cluster_label} (Confidence: {confidence:.2f})', color=cluster_color, linewidth=2)
+    
     ax.set_aspect('equal', adjustable='datalim')
     ax.legend()
     # plt.show()
-    cluster_name = 'ms' if cluster_method == 'meanshift' else 'db'
+    cluster_name = 'mct'
+    # cluster_name = 'ms' if cluster_method == 'meanshift' else 'db'
     plt.savefig('/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results/axs_fit_'+ cluster_name +'/event' + str(evtCount) + '.jpg')
     plt.close()
 
 
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (58,59):#(EvtNumTrain):
+    for evtCount in range (555,556):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values
