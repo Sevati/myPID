@@ -21,6 +21,10 @@ from LoadData import load_data, get_hits, processing_data, reassign_labels
 # except ImportError as e:
 #     print("Error importing LoadData module: ", e)
 #     sys.exit(1)
+
+cluster_method = 'dbscan' #'dbscan' or 'meanshift' or 'mct'
+data_type = 'truth' # 'hit' or 'truth'
+
 EvtNumTrain = 1000
 file_path = "/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/hit_2.txt"
 df_train = load_data(file_path)
@@ -29,8 +33,7 @@ df_train = load_data(file_path)
 # center_tolerance = 50  # 圆心容许距离
 tolerance = {'center': 10, 'radius': 10, 'dist': 20}
 max_retries = 5  # 最大重试次数
-cluster_method = 'meanshift' #'dbscan' or 'meanshift' or 'mct'
-threshold = 0.6   #置信度阈值
+threshold = 0.2 if data_type == 'hit' else 0.6   #置信度阈值
 
 # Step 1: MeanShift聚类
 def mean_shift_clustering(para_coords, quantile=0.3, n_samples=100):
@@ -78,8 +81,8 @@ def compute_confidence(points, xc, yc, r):
 # Step 4: 调整 MeanShift 直到所有圆弧的置信度都高于阈值
 # def process_clusters(hits, eps=0.124, min_samples=25):
 def process_clusters(hits, initial_quantile=0.45, n_samples=84):
-    points = hits[['tx', 'ty']].values
-    para_coords = hits[['finalX', 'finalY']].values
+    points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
+    para_coords = hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values
     quantile = initial_quantile
     previous_confidences = 0
     retries = 0
@@ -478,7 +481,8 @@ def visualize_clusters(evtCount, points, labels, confidences):
     ax.legend()
     # plt.show()
     cluster_name = 'ms' if cluster_method == 'meanshift' else 'db' if cluster_method == 'dbscan' else 'mct'
-    plt.savefig('/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results/fit_truth_'+ cluster_name +'/event' + str(evtCount) + '.jpg')
+    finder_name = 'axs_fit_' if data_type == 'hit' else 'fit_truth_'
+    plt.savefig('/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results/' + finder_name + cluster_name +'/event' + str(evtCount) + '.jpg')
     plt.close()
 
 
@@ -487,8 +491,8 @@ if __name__ == "__main__":
     for evtCount in range (EvtNumTrain):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
-        coords = hits[['tx', 'ty']].values
-        # para_coords = hits[['finalX', 'finalY']].values
+        coords = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
+       
         # 处理聚类并拟合圆弧
         labels, confidences = process_clusters(hits)   #置信度阈值
         
