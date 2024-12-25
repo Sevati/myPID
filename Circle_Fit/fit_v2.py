@@ -22,11 +22,12 @@ from LoadData import load_data, get_hits, processing_data, reassign_labels
 #     print("Error importing LoadData module: ", e)
 #     sys.exit(1)
 
-cluster_method = 'dbscan' #'dbscan' or 'meanshift' or 'mct'
+cluster_method = 'meanshift' #'dbscan' or 'meanshift' or 'mct'
 data_type = 'truth' # 'hit' or 'truth'
 
 EvtNumTrain = 1000
-file_path = "/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/hit_2.txt"
+# file_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/getFildEvent/GenfitOut_2.txt'
+file_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/hit_2.txt'
 df_train = load_data(file_path)
 # 定义公差
 # radius_tolerance = 50  # 半径容许偏差
@@ -80,26 +81,22 @@ def compute_confidence(points, xc, yc, r):
 
 # Step 4: 调整 MeanShift 直到所有圆弧的置信度都高于阈值
 # def process_clusters(hits, eps=0.124, min_samples=25):
-def process_clusters(hits, initial_quantile=0.45, n_samples=84):
+def process_clusters(hits):
     points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
     para_coords = hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values
-    quantile = initial_quantile
+
     previous_confidences = 0
     retries = 0
     if cluster_method == 'dbscan':
         eps = 0.124
-        min_samples = 8
+        min_samples = 25
     elif cluster_method == 'meanshift':
-        initial_quantile=0.45
+        quantile=0.45
         n_samples=84
-    # else:
-    #     print("Invalid cluster method. Please choose from 'dbscan' or'meanshift'.")
-    #     return None
-    
-
     
     while True:   #调参
         # Step 1: 聚类
+        # labels = dbscan_clustering(para_coords, eps, min_samples)
         labels = mean_shift_clustering(para_coords, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(para_coords, eps, min_samples) if cluster_method == 'dbscan' else hits['trkid']
         all_confidences = []
         track_data = {}
@@ -131,7 +128,7 @@ def process_clusters(hits, initial_quantile=0.45, n_samples=84):
                     other_label, other_xc, other_yc, other_r, other_confidence = merged_confidences[j]
 
                     if (label, other_label) not in merged_tracks:
-                        merged_result = merge_tracks(track_data[label], track_data[other_label], tolerance)
+                        merged_result = merge_tracks(track_data[label], track_data[other_label], tolerance) # 合并两条径迹
 
                         if merged_result is not None:
                             new_xc, new_yc, new_r = merged_result
@@ -241,14 +238,14 @@ def merge_tracks(track1, track2, tolerance):#threshold_radius=10, threshold_cent
     radius_diff = np.abs(r1 - r2)
 
     if distance_between_centers < threshold_center and radius_diff < threshold_radius:
-        print(f"Track1 and Track2 may come from the same circle based on center and radius.")
+        print(f"Track1 and Track2 may come from the same circle based on center and radius.-----1")
         merged_points = np.vstack((track1, track2))
         return fit_arc(merged_points)
 
     # 2. 判断两条径迹的点之间整体距离是否较小
     overall_distance = np.mean(cdist(track1, track2))  # 计算所有点的平均距离
     if overall_distance < threshold_distance:
-        print(f"Track1 and Track2 may come from the same circle based on overall distance.")
+        print(f"Track1 and Track2 may come from the same circle based on overall distance.-----2")
         merged_points = np.vstack((track1, track2))
         return fit_arc(merged_points)
     
@@ -262,7 +259,7 @@ def merge_tracks(track1, track2, tolerance):#threshold_radius=10, threshold_cent
     # 如果合并后的置信度提高，认为可以合并
     average_initial_confidence = (confidence1 + confidence2) / 2
     if merged_confidence > average_initial_confidence:
-        print(f"Track1 and Track2 merged due to improved confidence.")
+        print(f"Merged due to improved confidence.-----3")
         return merged_xc, merged_yc, merged_r
     
     #4. 判断较低置信度的径迹是否可以用较高置信度的径迹的圆心和半径来计算
@@ -271,12 +268,14 @@ def merge_tracks(track1, track2, tolerance):#threshold_radius=10, threshold_cent
         track2_confidence, _ = compute_confidence(track2, xc1, yc1, r1)
         if track2_confidence > threshold:
             merged_points = np.vstack((track1, track2))
+            print(f"Merged due to improved confidence.-----4")
             return fit_arc(merged_points)
     else:
         # 使用 track2 的圆心和半径计算 track1 的置信度
         track1_confidence, _ = compute_confidence(track1, xc2, yc2, r2)
         if track1_confidence > threshold:
             merged_points = np.vstack((track1, track2))
+            print(f"Merged due to improved confidence.-----4")
             return fit_arc(merged_points)
         
 
@@ -481,18 +480,24 @@ def visualize_clusters(evtCount, points, labels, confidences):
     ax.legend()
     # plt.show()
     cluster_name = 'ms' if cluster_method == 'meanshift' else 'db' if cluster_method == 'dbscan' else 'mct'
-    finder_name = 'axs_fit_' if data_type == 'hit' else 'fit_truth_'
-    plt.savefig('/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results/' + finder_name + cluster_name +'/event' + str(evtCount) + '.jpg')
+    finder_name = 'axs_fit_' if data_type == 'hit' else 'truth_fit_'
+    folder_path = '/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results_6/' + finder_name + cluster_name + '/'
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+    plt.savefig(folder_path + 'event' + str(evtCount) + '.jpg')
     plt.close()
 
 
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (EvtNumTrain):#(EvtNumTrain):
+    for evtCount in range (179,180):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
-       
+        
+        if len(coords) < 10:
+            continue
+
         # 处理聚类并拟合圆弧
         labels, confidences = process_clusters(hits)   #置信度阈值
         
