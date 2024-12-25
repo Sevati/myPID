@@ -481,7 +481,7 @@ def visualize_clusters(evtCount, points, labels, confidences):
     # plt.show()
     cluster_name = 'ms' if cluster_method == 'meanshift' else 'db' if cluster_method == 'dbscan' else 'mct'
     finder_name = 'axs_fit_' if data_type == 'hit' else 'truth_fit_'
-    folder_path = '/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results_6/' + finder_name + cluster_name + '/'
+    folder_path = '/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results_2/' + finder_name + cluster_name + '/'
     if not os.path.exists(folder_path):
         os.makedirs(folder_path)
     plt.savefig(folder_path + 'event' + str(evtCount) + '.jpg')
