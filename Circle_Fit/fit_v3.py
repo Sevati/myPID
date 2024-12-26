@@ -37,14 +37,16 @@ max_retries = 5  # 最大重试次数
 threshold = 0.2 if data_type == 'hit' else 0.6   #置信度阈值
 
 # Step 1: MeanShift聚类
-def mean_shift_clustering(para_coords, quantile=0.3, n_samples=100):
+def mean_shift_clustering(hits, quantile=0.3, n_samples=100):
+    para_coords = hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values
     bandwidth = estimate_bandwidth(para_coords, quantile=quantile, n_samples=n_samples)
     ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
-    ms.fit(para_coords)
+    ms.fit(para_coords)#, sample_weight=hits['weight'])
     labels = ms.labels_
     return labels
 
-def dbscan_clustering(para_coords, eps=0.124, min_samples=25):
+def dbscan_clustering(hits, eps=0.124, min_samples=25):
+    para_coords = hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values    
     db = DBSCAN(eps=eps, min_samples=int(min_samples))
     db.fit(para_coords)
     labels = db.labels_
@@ -78,216 +80,64 @@ def compute_confidence(points, xc, yc, r):
     confidence = 1 / (1 + avg_distance)  # 置信度与平均距离成反比
     return confidence, avg_distance
 
-# Step 4: 调整 MeanShift 直到所有圆弧的置信度都高于阈值
-# def process_clusters(hits, eps=0.124, min_samples=25):
-def process_clusters(hits):
-    ## 0. 筛选出直丝层的数据
-    vertical_layers = list(range(8, 20)) + list(range(36, 43))
+# 判断是否需要重新聚类的函数
+def need_recluster(hits,threshold=5, max_class_size=60):
+    labels = hits['label']
+    # 提取各类的点数量
+    class_sizes = {label: np.sum(labels == label) for label in np.unique(labels)}
     
-    points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
-    para_coords = hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values
-
-    previous_confidences = 0
-    retries = 0
-    if cluster_method == 'dbscan':
-        eps = 0.124
-        min_samples = 25
-    elif cluster_method == 'meanshift':
-        quantile=0.45
-        n_samples=84
-
-
-    while True:   #调参
-        # Step 1: 聚类
-        labels = mean_shift_clustering(para_coords, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(para_coords, eps, min_samples) if cluster_method == 'dbscan' else hits['trkid']
-        hits['label'] = hits['trkid'] if cluster_method=='mct' else reassign_labels(labels)
-        vertical_hits = hits[hits['layer'].isin(vertical_layers)]
-
-        all_confidences = []
-        track_data = {}
-
-        # Step2: 拟合圆弧并计算置信度
-        for cluster_label in np.unique(labels):
-            vertical_points = vertical_hits[['x', 'y']].values if data_type == 'hit' else vertical_hits[['tx', 'ty']].values
-            cluster_points = vertical_points[vertical_hits['label'] == cluster_label]
-            if cluster_points.shape[0] < 5:
-                continue
-            xc, yc, r = fit_arc(cluster_points)
-            confidence, _ = compute_confidence(cluster_points, xc, yc, r)
-            all_confidences.append((cluster_label, xc, yc, r, confidence))
-            track_data[cluster_label] = cluster_points  # 保存聚类的点
-
-        # Step 3: 合并径迹（递归合并逻辑）
-        if len(all_confidences) > 1:   
-            merged_confidences = all_confidences.copy()
-            merged_tracks = set()  # 用于存储已经合并过的径迹
-            updated_labels = labels.copy()  # 创建一个新的标签数组来更新标签
-
-            # 循环直到没有可合并的情况
-            def merge_clusters_recursive(i):
-                if i >= len(merged_confidences):
-                    return
-
-                label, xc, yc, r, confidence = merged_confidences[i]
-                # 尝试合并当前标签与后续标签
-                for j in range(i + 1, len(merged_confidences)):
-                    other_label, other_xc, other_yc, other_r, other_confidence = merged_confidences[j]
-
-                    if (label, other_label) not in merged_tracks:
-                        merged_result = merge_tracks(track_data[label], track_data[other_label], tolerance) # 合并两条径迹
-
-                        if merged_result is not None:
-                            new_xc, new_yc, new_r = merged_result
-                            merged_confidence, _ = compute_confidence(
-                                np.vstack((points[labels == label], points[labels == other_label])),
-                                new_xc, new_yc, new_r
-                            )
-
-                            # 更新合并后的结果
-                            merged_confidences[:] = [conf for conf in merged_confidences if conf[0] != other_label and conf[0] != label]
-                            merged_confidences.append((label, new_xc, new_yc, new_r, merged_confidence))
-
-                            # 更新标签
-                            updated_labels[updated_labels == other_label] = label  # 将第二个径迹的标签更新为第一个径迹的标签
-                            merged_tracks.add((label, other_label))  # 标记这两条径迹已经合并
-
-                            # 递归地继续合并 合并后的径迹
-                            merge_clusters_recursive(i)#？？？？？？？？？？？
-                            return  # 如果合并了，就停止当前循环
-
-                # 如果没有合并，则跳到下一个标签
-                merge_clusters_recursive(i + 1)
-
-            # 从第一个标签开始递归合并
-            merge_clusters_recursive(0)
-
-            labels = updated_labels.copy()
-            all_confidences = merged_confidences
-
-
-        # Step 4: 检查是否所有圆弧的置信度都大于阈值
-        all_above_threshold = all(confidence >= threshold for _, _, _, _, confidence in all_confidences)
-        # 如果所有圆弧的置信度都高于阈值，退出
-        if all_above_threshold:
-            break
-        # #用ransac重新聚类
-        # else:
-        #     track_data = {}
-        #     all_confidences = []
-        #     labels = np.zeros(points.shape[0])
-        #     Hits_R,labels = run_RANSAC(hits)
-        #     # 对每个聚类，拟合圆弧并计算置信度
-        #     for cluster_label in np.unique(labels):
-        #         cluster_points = points[labels == cluster_label]
-        #         if cluster_points.shape[0] < 10:
-        #             continue
-        #         xc, yc, r = fit_arc(cluster_points)
-        #         confidence, _ = compute_confidence(cluster_points, xc, yc, r)
-        #         all_confidences.append((cluster_label, xc, yc, r, confidence))
-        #         track_data[cluster_label] = cluster_points  # 保存聚类的点
-        #     break
-
+    # 检查条件：某类点个数超过 max_class_size 或者某两类的点平均距离小于 threshold
+    for label1 in class_sizes:
+        # 判断当前类的点是否超过 max_class_size
+        if class_sizes[label1] > max_class_size:
+            return True, hits
         
-        # 检查置信度是否有提高
-        current_confidences = [confidence for _, _, _, _, confidence in all_confidences]
-        print(f"Current confidences: {current_confidences}")
-        if previous_confidences is not None and current_confidences == previous_confidences:
-            # 如果修改后置信度没有提高，恢复参数并终止
-            print("No improvement in confidence after changing parameters. Restoring previous settings and terminating.")
-            break
-        else:
-            # 更新 previous_confidences 并增加重试次数
-            previous_confidences = current_confidences
-            retries += 1
-
-        # 如果已达到最大重试次数，则终止
-        if retries >= max_retries:
-            print("Maximum retries reached. Terminating.")
-            break
-
-        # 如果有圆弧的置信度低于阈值，则减小参数使得类别更细并重复聚类
-        if cluster_method == 'dbscan':
-            min_samples -= 1
-            min_samples = max(2, min_samples)  # 确保 min_samples 不小于2
-        elif cluster_method == 'meanshift':
-            quantile -= 0.1
-            quantile = max(0.1, quantile)  # 确保 quantile 不小于0.1
+    # 如果标签的数量小于 2，则不需要判断两类点的平均距离
+    if len(class_sizes) < 2:
+        return False, hits
     
-    return labels, all_confidences
+    # 检查两类点的平均距离
+    for label1 in class_sizes:
+        for label2 in class_sizes:
+            if label1 != label2:
+                # 获取label1和label2的点
+                points1 = hits[labels == label1]
+                points2 = hits[labels == label2]
+                
+                # 计算两个类的平均距离
+                avg_distance = np.mean(np.linalg.norm(points1[:, :2] - points2[:, :2], axis=1))
+                
+                # 如果平均距离小于阈值，则需要重新聚类
+                if avg_distance < threshold:
+                    hits.loc[labels == label2, 'label'] = label1
+                    return True, hits
+    return False, hits
 
-
-# Step 5: 判断两条径迹是否来自同一个圆，并合并
-def merge_tracks(track1, track2, tolerance):#threshold_radius=10, threshold_center=10, threshold_distance=20):
-    """
-    判断两条径迹是否可能来自同一个圆, 如果是，则合并它们并重新拟合圆弧. 
-    在判断两条径迹是否可能来自同一个圆时,考虑以下因素: 1.圆心和半径的偏差 2.径迹之间的整体距离 3.合并后置信度是否提高 
-    参数：
-    track1, track2: 两条径迹的数据点 (numpy 数组)
-    threshold_radius: 圆的半径差异阈值
-    threshold_center: 圆心的最大距离阈值
-    threshold_distance: 两条径迹整体的点间距离阈值
-
-    返回：
-    合并后的拟合圆心和半径 (xc, yc, r) 或 None
-    """
-    threshold_radius, threshold_center, threshold_distance = tolerance['radius'], tolerance['center'], tolerance['dist']
-
-    # 拟合两条径迹的圆弧
-    xc1, yc1, r1 = fit_arc(track1)
-    xc2, yc2, r2 = fit_arc(track2)
-
-    if xc1 is None or xc2 is None:
-        return None  # 如果其中一条径迹无法拟合圆弧，则返回 None
-
-    # 1. 判断圆心和半径的偏差是否足够小
-    distance_between_centers = np.sqrt((xc1 - xc2)**2 + (yc1 - yc2)**2)
-    radius_diff = np.abs(r1 - r2)
-
-    if distance_between_centers < threshold_center and radius_diff < threshold_radius:
-        print(f"Track1 and Track2 may come from the same circle based on center and radius.-----1")
-        merged_points = np.vstack((track1, track2))
-        return fit_arc(merged_points)
-
-    # 2. 判断两条径迹的点之间整体距离是否较小
-    overall_distance = np.mean(cdist(track1, track2))  # 计算所有点的平均距离
-    if overall_distance < threshold_distance:
-        print(f"Track1 and Track2 may come from the same circle based on overall distance.-----2")
-        merged_points = np.vstack((track1, track2))
-        return fit_arc(merged_points)
+# 执行重新聚类的函数
+def re_cluster_with_ransac(hits):
+    labels = hits['label']
+    # 提取符合条件的点
+    subhits = hits[np.isin(labels, np.unique(labels))]
     
-    # 3. 判断合并后平均置信度是否提高
-    confidence1, _ = compute_confidence(track1, xc1, yc1, r1)
-    confidence2, _ = compute_confidence(track2, xc2, yc2, r2)
-    #合并后径迹的置信度
-    merged_points = np.vstack((track1, track2))
-    merged_xc, merged_yc, merged_r = fit_arc(merged_points)
-    merged_confidence, _ = compute_confidence(merged_points, merged_xc, merged_yc, merged_r)
-    # 如果合并后的置信度提高，认为可以合并
-    average_initial_confidence = (confidence1 + confidence2) / 2
-    if merged_confidence > average_initial_confidence:
-        print(f"Merged due to improved confidence.-----3")
-        return merged_xc, merged_yc, merged_r
+    # 计算极坐标 R 和 Phi
+    subhits['R'] = np.sqrt(subhits['x']**2 + subhits['y']**2)
+    subhits['Phi'] = np.arctan2(subhits['y'], subhits['x'])
     
-    #4. 判断较低置信度的径迹是否可以用较高置信度的径迹的圆心和半径来计算
-    if confidence1 >= confidence2:
-        # 使用 track1 的圆心和半径计算 track2 的置信度
-        track2_confidence, _ = compute_confidence(track2, xc1, yc1, r1)
-        if track2_confidence > threshold:
-            merged_points = np.vstack((track1, track2))
-            print(f"Merged due to improved confidence.-----4")
-            return fit_arc(merged_points)
-    else:
-        # 使用 track2 的圆心和半径计算 track1 的置信度
-        track1_confidence, _ = compute_confidence(track1, xc2, yc2, r2)
-        if track1_confidence > threshold:
-            merged_points = np.vstack((track1, track2))
-            print(f"Merged due to improved confidence.-----4")
-            return fit_arc(merged_points)
-        
-
-    # 如果所有条件都不满足，则返回 None
-    return None
-
+    # 使用 MeanShift 对 subhits 内的点重新聚类
+    subhits_data = subhits[['R', 'Phi']].values
+    bandwidth = estimate_bandwidth(subhits_data, quantile=0.4, n_samples=100)
+    ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
+    ms.fit(subhits_data)#, sample_weight=hits['weight'])
+    labels = ms.labels_
+    ms.fit(subhits_data)
+    
+    # 获取新的聚类标签
+    new_labels = ms.labels_
+    
+    # 将新的标签赋回到 subhits 中
+    subhits['label'] = new_labels
+    
+    return subhits
 
 #用ransac聚类
 from sklearn.linear_model import RANSACRegressor
@@ -295,7 +145,6 @@ from sklearn import linear_model
 from sklearn.preprocessing import PolynomialFeatures
 from sklearn.pipeline import make_pipeline
 from sklearn.metrics import mean_squared_error, r2_score
-
 
 def RANSAC(Hits):
   R = Hits['R'].values.reshape(-1,1)
@@ -364,16 +213,214 @@ def run_RANSAC(Hits):
      label += 1
   Hits.loc[Hits['tag'] == False, 'tag'] = label #have noise
   #remove noise class,layer >3
-  Hits = Hits.groupby('tag').filter(lambda x: x['layer'].nunique() > 3 )
-  Hits = Hits.reset_index(drop=True)
-
-  #*******************merge cluster*************************
-  #Hits = Hits[Hits['tag'] != False].reset_index(drop=True)#no noise
-  merged = True
-  while merged:
-     Hits, merged = merge_labels(Hits)
-  #**********************************************************
+#   Hits = Hits.groupby('tag').filter(lambda x: x['layer'].nunique() > 3 )
+#   Hits = Hits.reset_index(drop=True)
   return Hits,Hits['tag'].values
+
+
+# Step 4: 调整 MeanShift 直到所有圆弧的置信度都高于阈值
+# def process_clusters(hits, eps=0.124, min_samples=25):
+def process_clusters(hits):
+    ## 0. 筛选出直丝层的数据
+    # vertical_layers = list(range(8, 20)) + list(range(36, 43))
+    # vertical_hits = hits[hits['layer'].isin(vertical_layers)]
+
+    points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
+    # para_coords = vertical_hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values
+
+    previous_confidences = 0
+    retries = 0
+    if cluster_method == 'dbscan':
+        eps = 0.124
+        min_samples = 25
+    elif cluster_method == 'meanshift':
+        quantile=0.45
+        n_samples=84
+
+
+    while True:   #调参
+        # Step 1: 聚类
+        labels = mean_shift_clustering(hits, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(hits, eps, min_samples) if cluster_method == 'dbscan' else hits['trkid']
+        hits['label'] = hits['trkid'] if cluster_method=='mct' else reassign_labels(labels)
+
+        all_confidences = []
+        track_data = {}
+
+        # Step 2: 检查是否所有径迹的点都小于60，若不是，则用ransac重新聚类
+        need, hits = need_recluster(hits)
+        if need: 
+            subHits = hits.copy()
+            hits = re_cluster_with_ransac(subHits)
+
+
+        # Step 3: 拟合圆弧并计算置信度
+        for cluster_label in np.unique(hits['label']):
+            # vertical_points = vertical_hits[['x', 'y']].values if data_type == 'hit' else vertical_hits[['tx', 'ty']].values
+            # cluster_points = vertical_points[vertical_hits['label'] == cluster_label]
+            cluster_points = points[hits['label'] == cluster_label]
+            if cluster_points.shape[0] < 5:
+                continue
+            xc, yc, r = fit_arc(cluster_points)
+            confidence, _ = compute_confidence(cluster_points, xc, yc, r)
+            all_confidences.append((cluster_label, xc, yc, r, confidence))
+            track_data[cluster_label] = cluster_points  # 保存聚类的点
+
+        # Step 4: 合并径迹（递归合并逻辑）
+        if len(all_confidences) > 1:   
+            merged_confidences = all_confidences.copy()
+            merged_tracks = set()  # 用于存储已经合并过的径迹
+            updated_labels = hits['label'].copy()  # 创建一个新的标签数组来更新标签
+
+            # 循环直到没有可合并的情况
+            def merge_clusters_recursive(i):
+                if i >= len(merged_confidences):
+                    return
+
+                label, xc, yc, r, confidence = merged_confidences[i]
+                # 尝试合并当前标签与后续标签
+                for j in range(i + 1, len(merged_confidences)):
+                    other_label, other_xc, other_yc, other_r, other_confidence = merged_confidences[j]
+
+                    if (label, other_label) not in merged_tracks:
+                        merged_result = merge_tracks(track_data[label], track_data[other_label], tolerance) # 合并两条径迹
+
+                        if merged_result is not None:
+                            new_xc, new_yc, new_r = merged_result
+                            merged_confidence, _ = compute_confidence(
+                                np.vstack((points[labels == label], points[labels == other_label])),
+                                new_xc, new_yc, new_r
+                            )
+
+                            # 更新合并后的结果
+                            merged_confidences[:] = [conf for conf in merged_confidences if conf[0] != other_label and conf[0] != label]
+                            merged_confidences.append((label, new_xc, new_yc, new_r, merged_confidence))
+
+                            # 更新标签
+                            updated_labels[updated_labels == other_label] = label  # 将第二个径迹的标签更新为第一个径迹的标签
+                            merged_tracks.add((label, other_label))  # 标记这两条径迹已经合并
+
+                            # 递归地继续合并 合并后的径迹
+                            merge_clusters_recursive(i)#？？？？？？？？？？？
+                            return  # 如果合并了，就停止当前循环
+
+                # 如果没有合并，则跳到下一个标签
+                merge_clusters_recursive(i + 1)
+
+            # 从第一个标签开始递归合并
+            merge_clusters_recursive(0)
+
+            labels = updated_labels.copy()
+            hits['label'] = reassign_labels(labels)
+            all_confidences = merged_confidences
+        
+
+        # Step 5: 检查是否所有圆弧的置信度都大于阈值
+        all_above_threshold = all(confidence >= threshold for _, _, _, _, confidence in all_confidences)
+        # 如果所有圆弧的置信度都高于阈值，退出
+        if all_above_threshold:
+            break
+
+        
+        # 检查置信度是否有提高
+        current_confidences = [confidence for _, _, _, _, confidence in all_confidences]
+        print(f"Current confidences: {current_confidences}")
+        if previous_confidences is not None and current_confidences == previous_confidences:
+            # 如果修改后置信度没有提高，恢复参数并终止
+            print("No improvement in confidence after changing parameters. Restoring previous settings and terminating.")
+            break
+        else:
+            # 更新 previous_confidences 并增加重试次数
+            previous_confidences = current_confidences
+            retries += 1
+
+        # 如果已达到最大重试次数，则终止
+        if retries >= max_retries:
+            print("Maximum retries reached. Terminating.")
+            break
+
+        # 如果有圆弧的置信度低于阈值，则减小参数使得类别更细并重复聚类
+        if cluster_method == 'dbscan':
+            min_samples -= 1
+            min_samples = max(2, min_samples)  # 确保 min_samples 不小于2
+        elif cluster_method == 'meanshift':
+            quantile -= 0.1
+            quantile = max(0.1, quantile)  # 确保 quantile 不小于0.1
+    
+    return labels, all_confidences
+
+
+# Step 5: 判断两条径迹是否来自同一个圆，并合并
+def merge_tracks(track1, track2, tolerance):#threshold_radius=10, threshold_center=10, threshold_distance=20):
+    """
+    判断两条径迹是否可能来自同一个圆, 如果是，则合并它们并重新拟合圆弧. 
+    在判断两条径迹是否可能来自同一个圆时,考虑以下因素: 1.圆心和半径的偏差 2.径迹之间的整体距离 3.合并后置信度是否提高 
+    参数：
+    track1, track2: 两条径迹的数据点 (numpy 数组)
+    threshold_radius: 圆的半径差异阈值
+    threshold_center: 圆心的最大距离阈值
+    threshold_distance: 两条径迹整体的点间距离阈值
+
+    返回：
+    合并后的拟合圆心和半径 (xc, yc, r) 或 None
+    """
+    threshold_radius, threshold_center, threshold_distance = tolerance['radius'], tolerance['center'], tolerance['dist']
+
+    # 拟合两条径迹的圆弧
+    xc1, yc1, r1 = fit_arc(track1)
+    xc2, yc2, r2 = fit_arc(track2)
+
+    if xc1 is None or xc2 is None:
+        return None  # 如果其中一条径迹无法拟合圆弧，则返回 None
+
+    # 1. 判断圆心和半径的偏差是否足够小
+    distance_between_centers = np.sqrt((xc1 - xc2)**2 + (yc1 - yc2)**2)
+    radius_diff = np.abs(r1 - r2)
+
+    if distance_between_centers < threshold_center and radius_diff < threshold_radius:
+        print(f"Track1 and Track2 may come from the same circle based on center and radius.-----1")
+        merged_points = np.vstack((track1, track2))
+        return fit_arc(merged_points)
+    
+    confidence1, _ = compute_confidence(track1, xc1, yc1, r1)
+    confidence2, _ = compute_confidence(track2, xc2, yc2, r2)
+
+    # # 2. 判断两条径迹的点之间整体距离是否较小
+    # overall_distance = np.mean(cdist(track1, track2))  # 计算所有点的平均距离
+    # if overall_distance < threshold_distance:
+    #     print(f"Track1 and Track2 may come from the same circle based on overall distance.-----2")
+    #     merged_points = np.vstack((track1, track2))
+    #     return fit_arc(merged_points)
+    
+    # # 3. 判断合并后平均置信度是否提高
+    # #合并后径迹的置信度
+    # merged_points = np.vstack((track1, track2))
+    # merged_xc, merged_yc, merged_r = fit_arc(merged_points)
+    # merged_confidence, _ = compute_confidence(merged_points, merged_xc, merged_yc, merged_r)
+    # # 如果合并后的置信度提高，认为可以合并
+    # average_initial_confidence = (confidence1 + confidence2) / 2
+    # if merged_confidence > average_initial_confidence:
+    #     print(f"Merged due to improved confidence.-----3")
+    #     return merged_xc, merged_yc, merged_r
+
+    # #4. 判断较低置信度的径迹是否可以用较高置信度的径迹的圆心和半径来计算
+    # if confidence1 >= confidence2:
+    #     # 使用 track1 的圆心和半径计算 track2 的置信度
+    #     track2_confidence, _ = compute_confidence(track2, xc1, yc1, r1)
+    #     if track2_confidence > threshold:
+    #         merged_points = np.vstack((track1, track2))
+    #         print(f"Merged due to improved confidence.-----4")
+    #         return fit_arc(merged_points)
+    # else:
+    #     # 使用 track2 的圆心和半径计算 track1 的置信度
+    #     track1_confidence, _ = compute_confidence(track1, xc2, yc2, r2)
+    #     if track1_confidence > threshold:
+    #         merged_points = np.vstack((track1, track2))
+    #         print(f"Merged due to improved confidence.-----4")
+    #         return fit_arc(merged_points)
+        
+
+    # 如果所有条件都不满足，则返回 None
+    return None
 
 
 # 可视化
@@ -494,13 +541,23 @@ def visualize_clusters(evtCount, points, labels, confidences):
     plt.close()
 
 
+# 为每个点分配权重
+def assign_weights(event_df, vertical_layer_range, incline_layer_range):
+    event_df['weight'] = event_df['layer'].apply(lambda x: 1.0 if x in vertical_layer_range else 0.6)
+    return event_df
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (0,100):#(EvtNumTrain):
+    for evtCount in range (5,6):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
-        
+        # 直丝层和斜丝层的标号范围
+        vertical_layer_range = list(range(8, 20)) + list(range(36, 43))
+        incline_layer_range = list(range(0, 8)) + list(range(20, 36))
+    
+        # 为点分配权重
+        hits = assign_weights(hits, vertical_layer_range, incline_layer_range)
+
         if len(coords) < 10:
             continue
 
