@@ -1,5 +1,4 @@
-###########在v2的基础上增加了对直丝和斜丝的判断。对所有点聚类，只用直丝的坐标估计圆弧并拟合，然后将斜丝分类。
-#what if 没有直丝？
+###########在v2的基础上增加了ransac,当某类点数大于60或某两类距离过近，则用ransac重新拟合。
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -43,14 +42,30 @@ def mean_shift_clustering(hits, quantile=0.3, n_samples=100):
     ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
     ms.fit(para_coords)#, sample_weight=hits['weight'])
     labels = ms.labels_
-    return labels
+    hits['label'] = reassign_labels(labels)
+    #*******************merge cluster*************************
+    # Hits = Hits[Hits['label'] != False].reset_index(drop=True)#no noise
+    merged = True
+    while merged:
+        hits, merged = merge_labels(hits)
+    #**********************************************************
+    
+    return hits
 
 def dbscan_clustering(hits, eps=0.124, min_samples=25):
     para_coords = hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values    
     db = DBSCAN(eps=eps, min_samples=int(min_samples))
     db.fit(para_coords)
     labels = db.labels_
-    return labels
+    hits['label'] = reassign_labels(labels)
+    #*******************merge cluster*************************
+    # Hits = Hits[Hits['label'] != False].reset_index(drop=True)#no noise
+    merged = True
+    while merged:
+        hits, merged = merge_labels(hits)
+    #**********************************************************
+    
+    return hits
 
 # Step 2: 拟合圆弧
 def fit_arc(points):
@@ -81,7 +96,7 @@ def compute_confidence(points, xc, yc, r):
     return confidence, avg_distance
 
 # 判断是否需要重新聚类的函数
-def need_recluster(hits,threshold=5, max_class_size=60):
+def need_recluster(hits,threshold=25, max_class_size=60):
     labels = hits['label']
     # 提取各类的点数量
     class_sizes = {label: np.sum(labels == label) for label in np.unique(labels)}
@@ -99,13 +114,19 @@ def need_recluster(hits,threshold=5, max_class_size=60):
     # 检查两类点的平均距离
     for label1 in class_sizes:
         for label2 in class_sizes:
-            if label1 != label2:
+            # if label1 != label2:
+            if label1 != label2 and class_sizes[label1] > 10 and class_sizes[label2] > 10:
                 # 获取label1和label2的点
                 points1 = hits[labels == label1]
                 points2 = hits[labels == label2]
+                # 提取坐标
+                points1_xy = points1[['x', 'y']].values
+                points2_xy = points2[['x', 'y']].values
+
+                distances = cdist(points1_xy[:, :2], points2_xy[:, :2], 'euclidean')
                 
                 # 计算两个类的平均距离
-                avg_distance = np.mean(np.linalg.norm(points1[:, :2] - points2[:, :2], axis=1))
+                avg_distance = np.mean(distances)
                 
                 # 如果平均距离小于阈值，则需要重新聚类
                 if avg_distance < threshold:
@@ -115,29 +136,39 @@ def need_recluster(hits,threshold=5, max_class_size=60):
 
 # 执行重新聚类的函数
 def re_cluster_with_ransac(hits):
-    labels = hits['label']
-    # 提取符合条件的点
-    subhits = hits[np.isin(labels, np.unique(labels))]
-    
+    hits['R']=''  # R
+    hits['Phi']=''  # Phi
     # 计算极坐标 R 和 Phi
-    subhits['R'] = np.sqrt(subhits['x']**2 + subhits['y']**2)
-    subhits['Phi'] = np.arctan2(subhits['y'], subhits['x'])
-    
-    # 使用 MeanShift 对 subhits 内的点重新聚类
-    subhits_data = subhits[['R', 'Phi']].values
-    bandwidth = estimate_bandwidth(subhits_data, quantile=0.4, n_samples=100)
-    ms = MeanShift(bandwidth=bandwidth, bin_seeding=True)
-    ms.fit(subhits_data)#, sample_weight=hits['weight'])
-    labels = ms.labels_
-    ms.fit(subhits_data)
-    
-    # 获取新的聚类标签
-    new_labels = ms.labels_
-    
-    # 将新的标签赋回到 subhits 中
-    subhits['label'] = new_labels
-    
-    return subhits
+    hits['R'] = np.sqrt(hits['x']**2 + hits['y']**2)
+    hits['Phi'] = np.arctan2(hits['y'], hits['x'])
+    # labels = hits['label']
+    # # 提取符合条件的点
+    # subhits = hits[np.isin(labels, np.unique(labels))]
+    subhits = hits.copy()
+
+    label=1
+    hits['label'] = False
+    while(subhits.shape[0] > 15 ):
+        subhits = RANSAC(subhits)
+        subhits.loc[subhits['label'] == True, 'label'] = label
+        hits.loc[hits['label'] == False, 'label'] = subhits['label']
+     
+        subhits = hits[hits['label'] ==False]
+        label += 1
+    hits.loc[hits['label'] == False, 'label'] = label #have noise
+    #remove noise class,layer >3
+    hits = hits.groupby('label').filter(lambda x: x['layer'].nunique() > 3 )
+    hits = hits.reset_index(drop=True)
+
+    #*******************merge cluster*************************
+    # Hits = Hits[Hits['label'] != False].reset_index(drop=True)#no noise
+    merged = True
+    while merged:
+        hits, merged = merge_labels(hits)
+    #**********************************************************
+    hits['label'] = reassign_labels(hits['label'])
+
+    return hits
 
 #用ransac聚类
 from sklearn.linear_model import RANSACRegressor
@@ -149,29 +180,31 @@ from sklearn.metrics import mean_squared_error, r2_score
 def RANSAC(Hits):
   R = Hits['R'].values.reshape(-1,1)
   Phi = Hits['Phi'].values.reshape(-1,1)
-  ransac = linear_model.RANSACRegressor()
+  ransac = linear_model.RANSACRegressor(random_state=0)
   ransac.fit(R,Phi)
   inlier_mask = ransac.inlier_mask_
-  Hits['tag']=inlier_mask
+  Hits['label']=inlier_mask
   return Hits
 
 def merge_labels(df):
-  label_layers = df.groupby('tag')['layer'].apply(set).reset_index()
+  label_layers = df.groupby('label')['layer'].apply(set).reset_index()
   label_layers['length'] = label_layers['layer'].apply(len)
-  tag_list = label_layers.sort_values('length')['tag'].tolist()
+  label_layers = label_layers[label_layers['length'] >= 5]
+  tag_list = label_layers.sort_values('length')['label'].tolist()
   group_combinations = []
   loop = 1
   for i in tag_list:  # i,j is tag
     candidate = []
     for j in tag_list[loop:]:
-          common_layers = len(label_layers.loc[label_layers['tag'] == i, 'layer'].values[0].intersection(label_layers.loc[label_layers['tag'] == j, 'layer'].values[0]))
-          if common_layers < 3:  # same layers must <3 when merge
+          common_layers = len(label_layers.loc[label_layers['label'] == i, 'layer'].values[0].intersection
+                              (label_layers.loc[label_layers['label'] == j, 'layer'].values[0]))
+          if common_layers < 5:  # same layers must <3 when merge
               candidate.append(j)
     if len(candidate) ==0:
        loop+=1
        continue
     elif len(candidate) ==1:
-       df.loc[df['tag'] == candidate[0], 'tag'] = i
+       df.loc[df['label'] == candidate[0], 'label'] = i
        #print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$1')
        return df, True
     else:
@@ -182,14 +215,14 @@ def merge_labels(df):
            y=df.loc[m,'y']
            df.loc[m,'Phi'] = np.arctan2(y,x)
        diff0 = 10
-       phi_avg1 = df[df['tag'] == i]['Phi'].mean()
+       phi_avg1 = df[df['label'] == i]['Phi'].mean()
        for k in candidate:
-          phi_avg2 = df[df['tag'] == k]['Phi'].mean()
+          phi_avg2 = df[df['label'] == k]['Phi'].mean()
           diff = abs(phi_avg1 - phi_avg2)
           if diff < diff0:
              diff0 = diff
              win = k
-       df.loc[df['tag'] == win, 'tag'] = i
+       df.loc[df['label'] == win, 'label'] = i
        #print('$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$2')
        return df, True
   return df, False
@@ -204,18 +237,18 @@ def run_RANSAC(Hits):
      Hits['R'] = np.sqrt(Hits['x']**2 + Hits['y']**2)
   label=1
   subHits = Hits.copy()
-  Hits['tag'] = False
+  Hits['label'] = False
   while(subHits.shape[0] > 15):
      subHits = RANSAC(subHits)
-     subHits.loc[subHits['tag'] == True] = label
-     Hits.loc[Hits['tag'] == False, 'tag'] = subHits['tag']
-     subHits = Hits[Hits['tag'] ==False]
+     subHits.loc[subHits['label'] == True] = label
+     Hits.loc[Hits['label'] == False, 'label'] = subHits['label']
+     subHits = Hits[Hits['label'] ==False]
      label += 1
-  Hits.loc[Hits['tag'] == False, 'tag'] = label #have noise
+  Hits.loc[Hits['label'] == False, 'label'] = label #have noise
   #remove noise class,layer >3
-#   Hits = Hits.groupby('tag').filter(lambda x: x['layer'].nunique() > 3 )
+#   Hits = Hits.groupby('label').filter(lambda x: x['layer'].nunique() > 3 )
 #   Hits = Hits.reset_index(drop=True)
-  return Hits,Hits['tag'].values
+  return Hits,Hits['label'].values
 
 
 # Step 4: 调整 MeanShift 直到所有圆弧的置信度都高于阈值
@@ -225,7 +258,6 @@ def process_clusters(hits):
     # vertical_layers = list(range(8, 20)) + list(range(36, 43))
     # vertical_hits = hits[hits['layer'].isin(vertical_layers)]
 
-    points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
     # para_coords = vertical_hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values
 
     previous_confidences = 0
@@ -240,8 +272,8 @@ def process_clusters(hits):
 
     while True:   #调参
         # Step 1: 聚类
-        labels = mean_shift_clustering(hits, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(hits, eps, min_samples) if cluster_method == 'dbscan' else hits['trkid']
-        hits['label'] = hits['trkid'] if cluster_method=='mct' else reassign_labels(labels)
+        hits = mean_shift_clustering(hits, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(hits, eps, min_samples) if cluster_method == 'dbscan' else hits['trkid']
+        hits['label'] = hits['trkid'] if cluster_method=='mct' else hits['label']
 
         all_confidences = []
         track_data = {}
@@ -253,6 +285,7 @@ def process_clusters(hits):
             hits = re_cluster_with_ransac(subHits)
 
 
+        points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
         # Step 3: 拟合圆弧并计算置信度
         for cluster_label in np.unique(hits['label']):
             # vertical_points = vertical_hits[['x', 'y']].values if data_type == 'hit' else vertical_hits[['tx', 'ty']].values
@@ -287,7 +320,7 @@ def process_clusters(hits):
                         if merged_result is not None:
                             new_xc, new_yc, new_r = merged_result
                             merged_confidence, _ = compute_confidence(
-                                np.vstack((points[labels == label], points[labels == other_label])),
+                                np.vstack((points[hits['label'] == label], points[hits['label'] == other_label])),
                                 new_xc, new_yc, new_r
                             )
 
@@ -310,7 +343,7 @@ def process_clusters(hits):
             merge_clusters_recursive(0)
 
             labels = updated_labels.copy()
-            hits['label'] = reassign_labels(labels)
+            hits['label'] = labels#reassign_labels(labels)
             all_confidences = merged_confidences
         
 
@@ -346,7 +379,7 @@ def process_clusters(hits):
             quantile -= 0.1
             quantile = max(0.1, quantile)  # 确保 quantile 不小于0.1
     
-    return labels, all_confidences
+    return hits, all_confidences
 
 
 # Step 5: 判断两条径迹是否来自同一个圆，并合并
@@ -424,7 +457,10 @@ def merge_tracks(track1, track2, tolerance):#threshold_radius=10, threshold_cent
 
 
 # 可视化
-def visualize_clusters(evtCount, points, labels, confidences):
+def visualize_clusters(evtCount, hits, confidences):
+    points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
+    labels = hits['label']
+
     fig, ax = plt.subplots(figsize=(10, 10))
     
     # 设定一个颜色映射（Color Map）
@@ -443,8 +479,7 @@ def visualize_clusters(evtCount, points, labels, confidences):
     for cluster_label, xc, yc, r, confidence in confidences:
         if confidence > 0:  # 只画置信度高的圆弧
             # 获取属于该聚类的点
-            cluster_points = points[labels == cluster_label]
-            
+            cluster_points = points[hits['label'] == cluster_label]
             # 计算每个点的角度
             angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
         
@@ -547,7 +582,7 @@ def assign_weights(event_df, vertical_layer_range, incline_layer_range):
     return event_df
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (5,6):#(EvtNumTrain):
+    for evtCount in range (EvtNumTrain):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
@@ -562,7 +597,7 @@ if __name__ == "__main__":
             continue
 
         # 处理聚类并拟合圆弧
-        labels, confidences = process_clusters(hits)   #置信度阈值
+        hits, confidences = process_clusters(hits)   #置信度阈值
         
         # 可视化结果
-        visualize_clusters(evtCount, coords, labels, confidences)
+        visualize_clusters(evtCount, hits, confidences)
