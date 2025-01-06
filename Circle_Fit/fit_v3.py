@@ -272,7 +272,7 @@ def process_clusters(hits):
 
     while True:   #调参
         # Step 1: 聚类
-        hits = mean_shift_clustering(hits, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(hits, eps, min_samples) if cluster_method == 'dbscan' else hits['trkid']
+        hits = mean_shift_clustering(hits, quantile=quantile, n_samples=n_samples) if cluster_method =='meanshift' else dbscan_clustering(hits, eps, min_samples) if cluster_method == 'dbscan' else hits
         hits['label'] = hits['trkid'] if cluster_method=='mct' else hits['label']
 
         all_confidences = []
@@ -537,6 +537,10 @@ def visualize_clusters(evtCount, hits, confidences):
             filtered_cluster_points = np.delete(cluster_points, actual_indices_to_remove, axis=0)   
             angles_positive = np.delete(angles_sorted, indices_to_remove, axis=0)
 
+            # 从 hits 中删除对应的点
+            hits.drop(hits.index[actual_indices_to_remove], inplace=True)
+            # hits.reset_index(drop=True, inplace=True)
+
             if len(filtered_cluster_points)>10:
                 # 重新拟合弧线
                 xc, yc, r = fit_arc(filtered_cluster_points)
@@ -574,6 +578,15 @@ def visualize_clusters(evtCount, hits, confidences):
         os.makedirs(folder_path)
     plt.savefig(folder_path + 'event' + str(evtCount) + '.jpg')
     plt.close()
+    
+    outfolder_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTmcp_data/'   
+    #将hits的字段“evtid,trkid,layer,wire,x,y,tx,ty,tz,rt,tdc,label”添加到已有txt文件
+    savehits = hits[['evtid', 'trkid', 'layer', 'wire', 'x', 'y', 'tx', 'ty', 'tz', 'rt', 'tdc', 'label']]
+    if os.path.exists(outfolder_path + 'hits_2.txt'):
+        with open(outfolder_path + 'hits_2.txt', 'a') as f:
+            savehits.to_csv(f, header=False, index=False)
+    else:
+        savehits.to_csv(outfolder_path + 'hits_2.txt', index=False)
 
 
 # 为每个点分配权重
@@ -582,7 +595,7 @@ def assign_weights(event_df, vertical_layer_range, incline_layer_range):
     return event_df
 # 示例使用
 if __name__ == "__main__":
-    for evtCount in range (EvtNumTrain):#(EvtNumTrain):
+    for evtCount in range (7,8):#(EvtNumTrain):
         print("-----------Processing event-----------:", evtCount)
         hits = get_hits(df_train, evtCount)
         coords = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
