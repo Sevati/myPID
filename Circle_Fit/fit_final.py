@@ -14,7 +14,7 @@ import os
 import sys
 current_script_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(os.path.join(current_script_path, '/Users/Sevati/PycharmProjects/untitled/PID/ML/test'))
-from LoadData import load_data, get_hits, processing_data, reassign_labels
+from LoadData import load_data, get_hits, reassign_labels
 # try:
 #     from LoadData import load_data
 # except ImportError as e:
@@ -25,7 +25,7 @@ cluster_method = 'meanshift' #'dbscan' or 'meanshift' or 'mct'
 data_type = 'hit' # 'hit' or 'truth'
 
 EvtNumTrain = 10000
-file_name = 'hit_4.txt'
+file_name = 'hit_2.txt'
 file_path = os.path.join('/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/', file_name)
 df_train = load_data(file_path)
 # 定义公差
@@ -464,7 +464,7 @@ def visualize_clusters(evtCount, hits, confidences):
     points = hits[['x', 'y']].values if data_type == 'hit' else hits[['tx', 'ty']].values
     labels = hits['label']
 
-    fig, ax = plt.subplots(figsize=(10, 10))
+    # fig, ax = plt.subplots(figsize=(10, 10))
     
     # 设定一个颜色映射（Color Map）
     le = LabelEncoder()
@@ -475,9 +475,9 @@ def visualize_clusters(evtCount, hits, confidences):
     cmap = matplotlib.colors.ListedColormap(cmap[:len(np.unique(labels))])  # 根据类别数量切片
 
 
-    # 绘制半透明的散点，边框不透明
-    ax.scatter(points[:, 0], points[:, 1], c=unique_labels, cmap=cmap, label='Data Points', 
-               alpha=0.3, edgecolor='black', linewidth=0.5)
+    # # 绘制半透明的散点，边框不透明
+    # ax.scatter(points[:, 0], points[:, 1], c=unique_labels, cmap=cmap, label='Data Points', 
+    #            alpha=0.3, edgecolor='black', linewidth=0.5)
     
     for cluster_label, xc, yc, r, confidence in confidences:
         if confidence > 0:  # 只画置信度高的圆弧
@@ -521,8 +521,13 @@ def visualize_clusters(evtCount, hits, confidences):
             # 从 hits 中删除对应的点
             hits.drop(hits.index[actual_indices_to_remove], inplace=True)
             # hits.reset_index(drop=True, inplace=True)
+            #删除 hits 中 label 点数少于10的点
+            label_counts = hits.groupby('label').size()
+            # 找出点数小于 10 的标签
+            labels_to_remove = label_counts[label_counts < 10].index
+            hits = hits[~hits['label'].isin(labels_to_remove)]
 
-            if len(filtered_cluster_points)>15:
+            if len(filtered_cluster_points) > 15:
                 # 重新拟合弧线
                 xc, yc, r = fit_arc(filtered_cluster_points)
                 angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
@@ -532,40 +537,40 @@ def visualize_clusters(evtCount, hits, confidences):
                 if abs(np.linalg.norm(np.array([xc, yc])) - r) > 15:
                     hits.drop(hits.index[hits['label'] == cluster_label], inplace=True)
                     continue
-                else:
-                    #重新计算置信度
-                    confidence, _ = compute_confidence(filtered_cluster_points, xc, yc, r)
+    #             else:
+    #                 #重新计算置信度
+    #                 confidence, _ = compute_confidence(filtered_cluster_points, xc, yc, r)
             
-                    theta1, theta2 = np.min(angles), np.max(angles)
-                    # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
-                    if theta2 - theta1  > 180 and (theta1 * theta2 < 0) and theta2 > 90 and theta1 < -90:   
-                        if np.all((angles <= -90) | (angles >= 90)) or np.all(angles >= -90) or np.all((angles <= -90) | (angles >= 0)) or np.all((angles <= 0) | (angles >= 90)):  #全部在2、3象限 或 全部在1、2、4象限 或 全部在1、2、3象限 或全部在2、3、4象限
-                            # 计算跨越 180° 时的角度范围
-                            theta1, theta2 = np.min(angles_positive), np.max(angles_positive)
+    #                 theta1, theta2 = np.min(angles), np.max(angles)
+    #                 # 如果角度跨度超过 π（180°），表示需要跨越 0°，反转方向
+    #                 if theta2 - theta1  > 180 and (theta1 * theta2 < 0) and theta2 > 90 and theta1 < -90:   
+    #                     if np.all((angles <= -90) | (angles >= 90)) or np.all(angles >= -90) or np.all((angles <= -90) | (angles >= 0)) or np.all((angles <= 0) | (angles >= 90)):  #全部在2、3象限 或 全部在1、2、4象限 或 全部在1、2、3象限 或全部在2、3、4象限
+    #                         # 计算跨越 180° 时的角度范围
+    #                         theta1, theta2 = np.min(angles_positive), np.max(angles_positive)
                     
-                    # 获取对应聚类的颜色
-                    cluster_color = cmap(cluster_label % len(np.unique(labels)))
+    #                 # 获取对应聚类的颜色
+    #                 cluster_color = cmap(cluster_label % len(np.unique(labels)))
 
-                    # 计算圆弧的x, y坐标
-                    theta = np.linspace(np.radians(theta1), np.radians(theta2), 100)
-                    x = xc + r * np.cos(theta)
-                    y = yc + r * np.sin(theta)
+    #                 # 计算圆弧的x, y坐标
+    #                 theta = np.linspace(np.radians(theta1), np.radians(theta2), 100)
+    #                 x = xc + r * np.cos(theta)
+    #                 y = yc + r * np.sin(theta)
 
-                    # 使用 plt.plot 显示圆弧，并添加置信度到图例
-                    ax.plot(x, y, label=f'Cluster {cluster_label} (Confidence: {confidence:.2f})', color=cluster_color, linewidth=2)
+    #                 # 使用 plt.plot 显示圆弧，并添加置信度到图例
+    #                 ax.plot(x, y, label=f'Cluster {cluster_label} (Confidence: {confidence:.2f})', color=cluster_color, linewidth=2)
     
-    ax.set_aspect('equal', adjustable='datalim')
-    ax.legend()
-    # plt.show()
-    cluster_name = 'ms' if cluster_method == 'meanshift' else 'db' if cluster_method == 'dbscan' else 'mct'
-    finder_name = 'axs_fit_' if data_type == 'hit' else 'truth_fit_'
-    folder_path = '/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results_2/' + finder_name + cluster_name + '/'
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-    plt.savefig(folder_path + 'event' + str(evtCount) + '.jpg')
-    plt.close()
+    # ax.set_aspect('equal', adjustable='datalim')
+    # ax.legend()
+    # # plt.show()
+    # cluster_name = 'ms' if cluster_method == 'meanshift' else 'db' if cluster_method == 'dbscan' else 'mct'
+    # finder_name = 'axs_fit_' if data_type == 'hit' else 'truth_fit_'
+    # folder_path = '/Users/Sevati/PycharmProjects/untitled/PID/Axs_Results_2/' + finder_name + cluster_name + '/'
+    # if not os.path.exists(folder_path):
+    #     os.makedirs(folder_path)
+    # plt.savefig(folder_path + 'event' + str(evtCount) + '.jpg')
+    # plt.close()
     
-    outfolder_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTmcp_data/'   
+    outfolder_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTmcp_data/111'   
     #将hits的字段“evtid,trkid,layer,wire,x,y,tx,ty,tz,rt,tdc,label”添加到已有txt文件
     savehits = hits[['evtid', 'trkid', 'layer', 'wire', 'x', 'y', 'tx', 'ty', 'tz', 'rt', 'tdc', 'label']]
     if os.path.exists(outfolder_path + file_name):
