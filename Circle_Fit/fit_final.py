@@ -25,8 +25,8 @@ cluster_method = 'meanshift' #'dbscan' or 'meanshift' or 'mct'
 data_type = 'hit' # 'hit' or 'truth'
 
 EvtNumTrain = 10000
-# file_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/getFildEvent/GenfitOut_2.txt'
-file_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/hit_2.txt'
+file_name = 'hit_4.txt'
+file_path = os.path.join('/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTdata/', file_name)
 df_train = load_data(file_path)
 # 定义公差
 # radius_tolerance = 50  # 半径容许偏差
@@ -51,7 +51,7 @@ def mean_shift_clustering(hits, quantile=0.3, n_samples=100):
     #**********************************************************
     
     return hits
-
+ 
 def dbscan_clustering(hits, eps=0.124, min_samples=25):
     para_coords = hits[['finalX', 'finalY']].values if data_type == 'hit' else hits[['finalTX', 'finalTY']].values    
     db = DBSCAN(eps=eps, min_samples=int(min_samples))
@@ -356,11 +356,6 @@ def process_clusters(hits):
             previous_confidences = current_confidences
             retries += 1
 
-        # # 如果已达到最大重试次数，则终止
-        # if retries >= max_retries:
-        #     print("Maximum retries reached. Terminating.")
-        #     break
-
         # 如果有圆弧的置信度低于阈值，则减小参数使得类别更细并重复聚类
         if cluster_method == 'dbscan':
             min_samples -= 1
@@ -491,7 +486,9 @@ def visualize_clusters(evtCount, hits, confidences):
             cluster_points = left_points[hits['label'] == cluster_label]
             # 计算每个点的角度
             angles = np.arctan2(cluster_points[:, 1] - yc, cluster_points[:, 0] - xc) * 180 / np.pi
-        
+            #若点数少于10，则跳过处理
+            if len(cluster_points)<10:
+                continue
             # 将负角度转换为正值
             angles_positive = np.where(angles < 0, angles + 360, angles)
             sorted_indices = np.argsort(angles_positive)
@@ -571,11 +568,11 @@ def visualize_clusters(evtCount, hits, confidences):
     outfolder_path = '/Users/Sevati/PycharmProjects/untitled/PID/pid_data/MCTmcp_data/'   
     #将hits的字段“evtid,trkid,layer,wire,x,y,tx,ty,tz,rt,tdc,label”添加到已有txt文件
     savehits = hits[['evtid', 'trkid', 'layer', 'wire', 'x', 'y', 'tx', 'ty', 'tz', 'rt', 'tdc', 'label']]
-    if os.path.exists(outfolder_path + 'hits_2.txt'):
-        with open(outfolder_path + 'hits_2.txt', 'a') as f:
+    if os.path.exists(outfolder_path + file_name):
+        with open(outfolder_path + file_name, 'a') as f:
             savehits.to_csv(f, header=False, index=False)
     else:
-        savehits.to_csv(outfolder_path + 'hits_2.txt', index=False)
+        savehits.to_csv(outfolder_path + file_name, index=False)
 
 
 # 为每个点分配权重
